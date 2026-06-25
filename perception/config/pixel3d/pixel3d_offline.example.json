@@ -1,0 +1,36 @@
+{
+  "description": "Pixel3D offline weights example — copy and edit paths for your machine",
+  "paths": {
+    "pixal3d_t": "${WEIGHTS_BASE}/pixal3d-t",
+    "rmbg": "${WEIGHTS_BASE}/RMBG-2.0",
+    "dinov3": "${WEIGHTS_BASE}/dinov3-vitl16-pretrain-lvd1689m"
+  },
+  "image_cond_configs": {
+    "ss": {
+      "model_name": "${WEIGHTS_BASE}/dinov3-vitl16-pretrain-lvd1689m",
+      "image_size": 512,
+      "grid_resolution": 16
+    },
+    "shape_512": {
+      "model_name": "${WEIGHTS_BASE}/dinov3-vitl16-pretrain-lvd1689m",
+      "image_size": 512,
+      "grid_resolution": 32,
+      "use_naf_upsample": true,
+      "naf_target_size": 512
+    },
+    "shape_1024": {
+      "model_name": "${WEIGHTS_BASE}/dinov3-vitl16-pretrain-lvd1689m",
+      "image_size": 1024,
+      "grid_resolution": 64,
+      "use_naf_upsample": true,
+      "naf_target_size": 512
+    },
+    "tex_1024": {
+      "model_name": "${WEIGHTS_BASE}/dinov3-vitl16-pretrain-lvd1689m",
+      "image_size": 1024,
+      "grid_resolution": 64,
+      "use_naf_upsample": true,
+      "naf_target_size": 1024
+    }
+  }
+}

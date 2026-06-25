@@ -1,0 +1,59 @@
+# VLM scene-understanding prompts for detection_bbox (use_scene_understand:=true).
+#
+# Prompt language: instructions may be Chinese and/or English.
+# Output: object names MUST be English (for Grounding DINO downstream).
+#
+# Copy and customize:
+#   scene_prompt_config:=/path/to/my_scene_prompts.yaml
+#
+# Placeholders:
+#   {max_objects}  — scene_max_objects parameter
+#   {prior_names}  — comma-separated prior object list on re-runs
+
+first_run:
+  intro: |
+    观察机器人相机拍摄的工作台/桌面图像，忽略机械臂或机械手。
+    Look at this workbench/table from a robot camera. Ignore any robotic arm or hand.
+
+rerun:
+  intro: |
+    观察工作台/桌面图像，忽略画面中可见的机械臂或机械手。
+    Look at this image of a workbench/table. Ignore any robotic arm or hand visible in the scene.
+  body: |
+    列出当前桌面上所有可移动的物体。
+    List ALL movable objects currently sitting on the table surface.
+
+naming_rules: |
+  命名规则 / Naming rules:
+  - 列出夹爪可从桌面抓取的独立、可移动物体
+    List discrete, movable objects a gripper could pick up from the table
+  - 每个物体用 2-4 个英文单词描述（含颜色/尺寸/材质，如可见）
+    Use specific 2-4 word ENGLISH phrases with color/size/material when visible
+    GOOD: "red screwdriver", "clear plastic bottle", "cardboard box", "sealed package"
+    BAD alone (never use as the whole name): part, item, thing, object, box, cable, component, label, stuff
+  - 多个相似物体需区分 / distinguish similar items (e.g. "large clear bottle", "small green bottle")
+  - 跳过固定线缆、插排、显示器、键盘、鼠标垫、桌面本身
+    Skip fixed/attached cables, power strips, monitor, keyboard, mouse pad, table surface
+  - 除非是可抓取的独立鼠标，否则跳过电脑鼠标
+    Skip computer mouse unless it is a loose object to grasp on the table
+  - 优先工具/零件名，而非纯外观词（用 "screwdriver" 而非 "yellow label"）
+    Prefer tool/part names over appearance-only labels
+
+json_rules: |
+  仅输出一行合法 JSON，不要 markdown 代码块，不要解释文字。
+  Respond with ONLY valid JSON on a single line. No markdown fences, no explanation.
+  Example: {"objects": ["red screwdriver", "clear plastic bottle"]}
+  If the table is empty: {"objects": []}
+  IMPORTANT: every string in "objects" MUST be English (not Chinese). Required for downstream detection.
+  Do NOT use comma-separated text or quoted lists outside JSON.
+
+prior_block: |
+  上下文 — 上次分析见过的物体（部分可能已被移走）: {prior_names}
+  Context — objects seen in a PREVIOUS analysis (some may have been removed): {prior_names}
+  - 仅列出当前桌面上仍清晰可见的物体 / List ONLY objects currently visible on the table NOW
+  - 只有仍可见时才保留之前的物体 / Re-include previous objects only if still clearly visible
+  - 不要列出已从桌面移走的物体 / Do NOT list objects that were removed from the table
+  - 新出现的可移动物体用具体英文名称 / Add newly appeared objects with specific ENGLISH names
+
+max_objects_line: "最多 {max_objects} 个物体。Maximum {max_objects} objects."
+rerun_max_objects_line: "- 最多 {max_objects} 个物体 / At most {max_objects} objects"

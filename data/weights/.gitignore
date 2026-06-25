@@ -1,0 +1,7 @@
+# Model weights - download or symlink into subdirectories
+# Keep directory structure, ignore actual weight files
+*
+!.gitignore
+!.gitkeep
+!*/
+!*/.gitkeep

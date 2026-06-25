@@ -1,0 +1,51 @@
+# 感知节点离线权重配置示例 — 路径相对 PERCEPTION_WEIGHTS_DIR / data/weights/
+# 部署步骤:
+#   1. 下载权重到 data/weights/（或设置 PERCEPTION_WEIGHTS_DIR）
+#   2. 将 pipeline.offline.example.json 拷贝为模型目录下的 pipeline.json:
+#      cp $(ros2 pkg prefix robot_perception)/share/robot_perception/config/pixel3d/pipeline.offline.example.json \
+#         ${PERCEPTION_WEIGHTS_DIR}/pixal3d-t/pipeline.json
+#   3. colcon build --packages-select robot_perception
+#   4. 启动 (pixel3d_offline_config 留空即可自动加载包内默认配置)
+#
+# 也可以手动指定:
+#   ros2 launch robot_perception detection_bbox.launch.py \
+#       use_pixel3d:=true \
+#       pixel3d_offline_config:=/path/to/pixel3d_offline.example.json
+
+# ============================================================
+# 模型权重清单 (默认位于 data/weights/ 或 PERCEPTION_WEIGHTS_DIR)
+# ============================================================
+
+models:
+  pixal3d_pipeline:
+    path: ${WEIGHTS_BASE}/pixal3d-t
+    description: "Pixal3D 主 pipeline (8个子模型 .safetensors)"
+    config_file: pipeline.json  # 从 pipeline.offline.example.json 拷贝
+
+  dinov3:
+    path: ${WEIGHTS_BASE}/dinov3-vitl16-pretrain-lvd1689m
+    description: "DINOv3 ViT-L/16 预训练权重 (transformers format)"
+    huggingface_id: "camenduru/dinov3-vitl16-pretrain-lvd1689m"
+
+  rmbg:
+    path: ${WEIGHTS_BASE}/RMBG-2.0
+    description: "BiRefNet 背景分割模型"
+    huggingface_id: "briaai/RMBG-2.0"
+
+  sam2:
+    path: ${WEIGHTS_BASE}/sam2/sam2.1_hiera_tiny.pt
+    description: "SAM2.1 Hiera-Tiny checkpoint"
+
+  grounding_dino:
+    config: ${WEIGHTS_BASE}/grounding_dino/GroundingDINO_SwinT_OGC.py
+    checkpoint: ${WEIGHTS_BASE}/grounding_dino/groundingdino_swint_ogc.pth
+    description: "Grounding DINO SwinT-OGC"
+
+  foundation_stereo:
+    path: ${WEIGHTS_BASE}/foundation_stereo/foundation_stereo.plan
+    description: "Foundation Stereo TensorRT plan"
+
+  minicpm_vlm:
+    path: ${WEIGHTS_BASE}/minicpm-v-4.6-gptq
+    description: "MiniCPM-V 4.6 GPTQ (OpenAI compatible API serve)"
+    serve_script: "scripts/start_minicpm_vlm_server.sh"

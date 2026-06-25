@@ -1,0 +1,28 @@
+# Build artifacts
+build/
+install/
+log/
+logs/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Site-specific robot calibration (do not commit production data)
+perception/config/calib_results/*.npz
+perception/config/calib_results/*.npy
+perception/config/calib_results/debug/
+perception/config/calib_results/hand_eye_data.npz
+perception/config/calib_results/T_*.npy
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,22 @@
+# 接触检测与电流保护阈值（单位见注释）
+# 客户可根据实际硬件与负载微调；也可通过 gesture_node ROS 参数覆盖。
+
+contact:
+  # 触觉：单指压感阈值 (0-255)
+  pressure_threshold: 20.0
+  # 触觉：矩阵压感合值质量阈值 (g)
+  mass_threshold: 2.0
+
+  # 无触觉时：关节电流相对基线增量判定接触 (mA)
+  current_delta: 270
+  # 窄物体力控原语 (hook / small_warp / palmar) 使用的较小增量 (mA)
+  current_delta_narrow: 250
+  # 电流基线稳定帧数 (@10Hz，默认约 1s)
+  current_settle_frames: 10
+
+  # 力控原语持握阶段安全电流上限 (mA)，超过则回退闭合量
+  hold_safe_current: 800
+
+  # 全局过载保护：任一关节电流超过阈值持续过久 → 自动 init
+  overload_threshold: 1000
+  overload_duration_sec: 2.0

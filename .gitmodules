@@ -1,0 +1,7 @@
+[submodule "third_party/robot_perception/MiniCPM-V"]
+	path = third_party/robot_perception/MiniCPM-V
+	url = https://github.com/OpenBMB/MiniCPM-V.git
+
+[submodule "third_party/robot_perception/Pixal3D"]
+	path = third_party/robot_perception/Pixal3D
+	url = https://github.com/TencentARC/Pixal3D.git

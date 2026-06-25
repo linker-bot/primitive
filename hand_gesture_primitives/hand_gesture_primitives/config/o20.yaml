@@ -1,0 +1,114 @@
+# LinkerHand O20 关节配置
+# 20-DOF, 内部表示与硬件表示一致 (identity mapping)
+
+hand_joint: O20
+num_joints: 20
+
+joint_names:
+  - thumb_base
+  - index_base
+  - middle_base
+  - ring_base
+  - pinky_base
+  - thumb_abd
+  - index_abd
+  - middle_abd
+  - ring_abd
+  - pinky_abd
+  - thumb_rot
+  - rsv_11
+  - rsv_12
+  - rsv_13
+  - rsv_14
+  - thumb_tip
+  - index_tip
+  - middle_tip
+  - ring_tip
+  - pinky_tip
+
+# O20 内部索引 → 硬件索引映射 (identity, 不反转)
+from_o20:
+  0:  {to: 0,  invert: false}
+  1:  {to: 1,  invert: false}
+  2:  {to: 2,  invert: false}
+  3:  {to: 3,  invert: false}
+  4:  {to: 4,  invert: false}
+  5:  {to: 5,  invert: false}
+  6:  {to: 6,  invert: false}
+  7:  {to: 7,  invert: false}
+  8:  {to: 8,  invert: false}
+  9:  {to: 9,  invert: false}
+  10: {to: 10, invert: false}
+  15: {to: 15, invert: false}
+  16: {to: 16, invert: false}
+  17: {to: 17, invert: false}
+  18: {to: 18, invert: false}
+  19: {to: 19, invert: false}
+
+reserved:
+  indices: [11, 12, 13, 14]
+  default: 0
+
+calibration: {}
+
+# 正运动学配置 (FK)
+# O20 使用自己的 URDF (与 L20 关节限位不同, 不可混用)
+fk:
+  urdf_model: o20
+  base_link: hand_link
+  fingertip_links:
+    - thumb_proximal_Link
+    - index_distal_Link
+    - middle_distal_Link
+    - ring_distal_Link
+    - pinky_distal_Link
+  # URDF 正方向与 O20 硬件约定相反的关节 (需反转映射)
+  # thumb_cmc_yaw: O20 val↑=内收, 但 URDF 正角度=外展
+  invert_joints:
+    - thumb_cmc_yaw
+  # 指肚接触面偏移 (link 局部坐标系, 单位: 米)
+  # 从 link origin (DIP/MCP 关节轴心) 偏移到指肚中心
+  # [x, y, z]: x=掌侧(正), y=侧向, z=沿骨方向(指尖)
+  # 依据 O20 mesh 几何实测: distal link 长约 52mm, 指肚在 ~60% 处 + 掌侧 6mm
+  # 注意: 拇指 mesh 是多壳结构, pad外表面在 X≈-2mm, 不能用太大负值
+  tip_offsets:
+    thumb_proximal_Link: [-0.003, 0.0, 0.027]
+    index_distal_Link:   [0.006, 0.0, 0.030]
+    middle_distal_Link:  [0.006, 0.0, 0.030]
+    ring_distal_Link:    [0.006, 0.0, 0.030]
+    pinky_distal_Link:   [0.006, 0.0, 0.030]
+  o20_to_urdf_joint:
+    0:  thumb_cmc_roll
+    1:  index_mcp_pitch
+    2:  middle_mcp_pitch
+    3:  ring_mcp_pitch
+    4:  pinky_mcp_pitch
+    5:  thumb_cmc_yaw
+    6:  index_mcp_roll
+    7:  middle_mcp_roll
+    8:  ring_mcp_roll
+    9:  pinky_mcp_roll
+    10: thumb_cmc_pitch
+    15: thumb_mcp
+    16: index_dip
+    17: middle_dip
+    18: ring_dip
+    19: pinky_dip
+  # 左手覆盖: URDF 关节/link 命名与右手不同
+  side_overrides:
+    left:
+      fingertip_links:
+        - thumb_distal_Link
+        - index_distal_Link
+        - middle_distal_Link
+        - ring_distal_Link
+        - pinky_distal_Link
+      invert_joints: []
+      tip_offsets:
+        thumb_distal_Link:   [-0.003, 0.0, 0.027]
+        index_distal_Link:   [0.006, 0.0, 0.030]
+        middle_distal_Link:  [0.006, 0.0, 0.030]
+        ring_distal_Link:    [0.006, 0.0, 0.030]
+        pinky_distal_Link:   [0.006, 0.0, 0.030]
+      o20_to_urdf_joint:
+        15: thumb_dip

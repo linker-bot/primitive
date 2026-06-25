@@ -1,0 +1,43 @@
+# 中文为主场景理解提示词（与默认双语版等价，输出仍要求英文物体名）
+#
+# 默认已使用 config/scene_understand_prompts.yaml（中英双语指令）。
+# 仅在希望指令几乎全中文时使用本文件:
+#   scene_prompt_config:=/path/to/scene_understand_prompts.zh.yaml
+
+first_run:
+  intro: |
+    观察机器人相机拍摄的工作台/桌面图像，忽略机械臂或机械手。
+
+rerun:
+  intro: |
+    观察工作台/桌面图像，忽略画面中可见的机械臂或机械手。
+  body: |
+    列出当前桌面上所有可移动的物体。
+
+naming_rules: |
+  命名规则:
+  - 列出夹爪可以从桌面抓取的独立、可移动物体
+  - 每个物体用 2-4 个英文单词描述，包含颜色/尺寸/材质（如可见）
+    正确示例: "red screwdriver", "clear plastic bottle", "cardboard box"
+    禁止单独使用: part, item, thing, object, box, cable, component, label, stuff
+  - 多个相似物体需区分，如 "large clear bottle" 与 "small green bottle"
+  - 跳过固定线缆、插排、显示器、键盘、鼠标垫、桌面本身
+  - 除非是可抓取的独立鼠标，否则跳过电脑鼠标
+  - 优先使用工具/零件名称，而非纯外观词（用 "screwdriver" 而非 "yellow label"）
+
+json_rules: |
+  仅输出一行合法 JSON，不要 markdown 代码块，不要解释文字。
+  示例: {"objects": ["red screwdriver", "clear plastic bottle"]}
+  若桌面为空: {"objects": []}
+  重要: "objects" 中每个名称必须是英文（不能是中文），供下游 Grounding DINO 检测使用。
+  不要使用 JSON 以外的逗号分隔文本或引号列表。
+
+prior_block: |
+  上下文 — 上次分析见过的物体（部分可能已被移走）: {prior_names}
+  - 仅列出当前桌面上仍清晰可见的物体
+  - 只有仍可见时才保留之前的物体
+  - 不要列出已从桌面移走的物体
+  - 添加新出现的可移动物体，使用具体英文名称
+
+max_objects_line: "最多 {max_objects} 个物体。"
+rerun_max_objects_line: "- 最多 {max_objects} 个物体"

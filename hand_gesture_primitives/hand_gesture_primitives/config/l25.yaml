@@ -1,0 +1,115 @@
+# LinkerHand L25 关节配置
+# 25-DOF, 弯曲/拇指方向与 O20 相反, 指尖与指中耦合
+#
+# L25 布局:
+#   [0-4]   指根弯曲 (255=张开, 0=弯曲)
+#   [5]     拇指侧摆 (255=外展, 0=内收)
+#   [6-9]   四指侧摆 (方向同 O20)
+#   [10]    拇指旋转 (255=自然位, 0=最大旋转)
+#   [11-14] 保留位 (默认 255)
+#   [15-19] 指中弯曲 (255=伸直, 0=弯曲)
+#   [20-24] 指尖弯曲 (随指中耦合)
+
+hand_joint: L25
+num_joints: 25
+
+joint_names:
+  - thumb_base
+  - index_base
+  - middle_base
+  - ring_base
+  - pinky_base
+  - thumb_abd
+  - index_abd
+  - middle_abd
+  - ring_abd
+  - pinky_abd
+  - thumb_rot
+  - rsv_11
+  - rsv_12
+  - rsv_13
+  - rsv_14
+  - thumb_mid
+  - index_mid
+  - middle_mid
+  - ring_mid
+  - pinky_mid
+  - thumb_tip
+  - index_tip
+  - middle_tip
+  - ring_tip
+  - pinky_tip
+
+# O20 内部索引 → L25 硬件索引映射
+# invert: true 表示 hw_val = 255 - o20_val
+# also: 额外复制到的硬件索引 (耦合关节)
+from_o20:
+  0:  {to: 0,  invert: true}
+  1:  {to: 1,  invert: true}
+  2:  {to: 2,  invert: true}
+  3:  {to: 3,  invert: true}
+  4:  {to: 4,  invert: true}
+  5:  {to: 5,  invert: true}
+  6:  {to: 6,  invert: false}
+  7:  {to: 7,  invert: false}
+  8:  {to: 8,  invert: false}
+  9:  {to: 9,  invert: false}
+  10: {to: 10, invert: true}
+  15: {to: 15, invert: true, also: [20]}
+  16: {to: 16, invert: true, also: [21]}
+  17: {to: 17, invert: true, also: [22]}
+  18: {to: 18, invert: true, also: [23]}
+  19: {to: 19, invert: true, also: [24]}
+
+reserved:
+  indices: [11, 12, 13, 14]
+  default: 255
+
+# 校准偏移 (硬件单位, 在方向转换后施加)
+# 用于补偿 L25 与 O20 不同机械结构导致的姿态偏差
+# 键为硬件索引, 值为偏移量 (正=增大, 负=减小), 结果 clamp 到 [0, 255]
+calibration:
+  # 拇指校准 (调整后拇食指对头)
+  # 5: -10    # thumb_abd: 负值=更内收
+  # 10: +15   # thumb_rot: 正值=更接近自然位
+
+# 正运动学配置 (FK)
+# o20_to_urdf_joint: O20 通道索引 → URDF 关节名 (仅映射 actuated joints)
+# fingertip_links: URDF 中各指尖 link 名 (顺序: thumb, index, middle, ring, pinky)
+# base_link: FK 计算的参考坐标系 (URDF 根 link)
+# urdf_model: URDF 目录/文件中的型号标识
+fk:
+  urdf_model: l25
+  base_link: hand_base_link
+  fingertip_links:
+    - thumb_distal
+    - index_distal
+    - middle_distal
+    - ring_distal
+    - pinky_distal
+  # 指肚接触面偏移 (link 局部坐标系, 单位: 米)
+  # L25 distal link 长约 23mm (从 DIP 前方), 指肚在 ~65% 处 + 掌侧 10mm
+  # [x, y, z]: x=掌侧(正), y=侧向, z=沿骨方向(指尖)
+  tip_offsets:
+    thumb_distal:  [0.003, 0.0, 0.020]
+    index_distal:  [0.010, 0.0, 0.015]
+    middle_distal: [0.010, 0.0, 0.015]
+    ring_distal:   [0.010, 0.0, 0.015]
+    pinky_distal:  [0.010, 0.0, 0.015]
+  o20_to_urdf_joint:
+    0:  thumb_cmc_roll
+    1:  index_mcp_pitch
+    2:  middle_mcp_pitch
+    3:  ring_mcp_pitch
+    4:  pinky_mcp_pitch
+    5:  thumb_cmc_yaw
+    6:  index_mcp_roll
+    7:  middle_mcp_roll
+    8:  ring_mcp_roll
+    9:  pinky_mcp_roll
+    10: thumb_cmc_pitch
+    15: thumb_mcp
+    16: index_pip
+    17: middle_pip
+    18: ring_pip
+    19: pinky_pip

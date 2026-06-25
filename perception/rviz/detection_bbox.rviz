@@ -1,0 +1,304 @@
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 84
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /Grid (workbench)1
+        - /Hybrid Surface1
+        - /Raw Image1
+        - /Annotated Image1
+      Splitter Ratio: 0.5
+    Tree Height: 680
+  - Class: rviz_common/Selection
+    Name: Selection
+  - Class: rviz_common/Tool Properties
+    Expanded:
+      - /Measure1
+    Name: Tool Properties
+    Splitter Ratio: 0.588679015636444
+  - Class: rviz_common/Views
+    Expanded:
+      - /Current View1
+    Name: Views
+    Splitter Ratio: 0.5
+  - Class: rviz_common/Time
+    Experimental: false
+    Name: Time
+    SyncMode: 0
+    SyncSource: Hybrid Surface
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.35
+      Cell Size: 0.05
+      Class: rviz_default_plugins/Grid
+      Color: 90; 90; 95
+      Enabled: true
+      Line Style:
+        Line Width: 0.02
+        Value: Lines
+      Name: Grid (workbench)
+      Normal Cell Count: 0
+      Offset:
+        X: 0
+        Y: 0
+        Z: -1
+      Plane: XY
+      Plane Cell Count: 24
+      Reference Frame: world
+      Value: true
+    - Class: rviz_default_plugins/Axes
+      Enabled: true
+      Length: 0.12
+      Name: World Axes
+      Radius: 0.008
+      Reference Frame: world
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Frame Timeout: 15
+      Marker Scale: 0.06
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: false
+      Tree:
+        {}
+      Update Interval: 0
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Workbench Plane
+      Namespaces:
+        {}
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /camera_head/detection_bbox/markers_workbench_plane
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Hybrid Surface
+      Namespaces:
+        {}
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /camera_head/detection_bbox/markers_surface
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: false
+      Name: AABB Wireframes
+      Namespaces:
+        {}
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /camera_head/detection_bbox/markers_workbench
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: false
+      Name: Camera 3D Boxes
+      Namespaces:
+        {}
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /camera_head/detection_bbox/markers_camera
+      Value: true
+    - Class: rviz_default_plugins/Axes
+      Enabled: false
+      Length: 0.08
+      Name: Camera Optical Axes
+      Radius: 0.005
+      Reference Frame: camera_head_color_optical_frame
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Raw Image
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /camera_head/color/image_raw
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Annotated Image
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /camera_head/detection_bbox/annotated
+      Value: true
+    - Class: rviz_default_plugins/PointCloud2
+      Enabled: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: Object Points
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.003
+      Style: Points
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /camera_head/detection_bbox/object_points
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: false
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Fingertip Positions
+      Namespaces:
+        {}
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /cb_left_hand_fingertip_markers
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 32; 34; 38
+    Fixed Frame: world
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 0.72
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.06
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: -0.88
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.04
+      Invert Z Axis: false
+      Name: Workbench Oblique
+      Near Clip Distance: 0.01
+      Pitch: 0.72
+      Target Frame: world
+      Value: Orbit (rviz)
+      Yaw: 0.65
+    Saved:
+      - Class: rviz_default_plugins/Orbit
+        Distance: 0.55
+        Enable Stereo Rendering:
+          Stereo Eye Separation: 0.06
+          Stereo Focal Distance: 1
+          Swap Stereo Eyes: false
+          Value: false
+        Focal Point:
+          X: 0
+          Y: 0
+          Z: -0.9
+        Focal Shape Fixed Size: true
+        Focal Shape Size: 0.04
+        Invert Z Axis: false
+        Name: Workbench Top
+        Near Clip Distance: 0.01
+        Pitch: 1.15
+        Target Frame: world
+        Value: Orbit (rviz)
+        Yaw: 0.785
+      - Class: rviz_default_plugins/Orbit
+        Distance: 0.85
+        Enable Stereo Rendering:
+          Stereo Eye Separation: 0.06
+          Stereo Focal Distance: 1
+          Swap Stereo Eyes: false
+          Value: false
+        Focal Point:
+          X: 0
+          Y: 0
+          Z: -0.88
+        Focal Shape Fixed Size: true
+        Focal Shape Size: 0.04
+        Invert Z Axis: false
+        Name: Workbench Side
+        Near Clip Distance: 0.01
+        Pitch: 0.35
+        Target Frame: world
+        Value: Orbit (rviz)
+        Yaw: 1.57
+      - Class: rviz_default_plugins/Orbit
+        Distance: 1.1
+        Enable Stereo Rendering:
+          Stereo Eye Separation: 0.06
+          Stereo Focal Distance: 1
+          Swap Stereo Eyes: false
+          Value: false
+        Focal Point:
+          X: 0
+          Y: 0
+          Z: -0.85
+        Focal Shape Fixed Size: true
+        Focal Shape Size: 0.04
+        Invert Z Axis: false
+        Name: Wide Overview
+        Near Clip Distance: 0.01
+        Pitch: 0.55
+        Target Frame: world
+        Value: Orbit (rviz)
+        Yaw: 0.4
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Hide Left Dock: false
+  Hide Right Dock: false
+  QMainWindow State: 000000ff00000000fd000000040000000000000156000003a0fc0200000009fb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001a0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f006c000000010000000200000185000000a3fb0000002000540069006d006500200050006c006100790065007200000000000000000488000002eb00fffffffb0000001200530069006700680074007300200049006d00610067650100000028000488000000000000000000000001000200000000000000000488000003fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Selection:
+    collapsed: false
+  Time:
+    collapsed: false
+  Tool Properties:
+    collapsed: false
+  Views:
+    collapsed: false
+  Width: 1440
+  X: 40
+  Y: 40
