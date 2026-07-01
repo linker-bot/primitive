@@ -1,43 +1,27 @@
 """放松再抓紧原语 — 先张开放松，再握紧。"""
 
-from typing import List
+from typing import List, Optional
 
-from ..primitive_base import (
-    HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
-    lerp_angles, ABD_NEUTRAL,
-)
+from ..gesture_engine import RelaxGripEngine, make_static_engine
+from ..gesture_params import CANONICAL_SEMANTIC_HAND, load_static_gesture_params
+from ..primitive_base import HandGesturePrimitive, PrimitiveContext, PrimitiveResult
 
-RELAX_ANGLES = [
-    0, 0, 0, 0, 0,               # base: 全部伸直
-    0, ABD_NEUTRAL, ABD_NEUTRAL, ABD_NEUTRAL, ABD_NEUTRAL,  # abd
-    0,                            # thumb_rot
-    0, 0, 0, 0,                   # rsv
-    0, 0, 0, 0, 0,               # tip: 全部伸直
-]
-
-GRIP_ANGLES = [
-    255, 255, 255, 255, 255,      # base: 最大弯曲
-    140, ABD_NEUTRAL, ABD_NEUTRAL, ABD_NEUTRAL, ABD_NEUTRAL,  # abd
-    160,                          # thumb_rot: 压住
-    0, 0, 0, 0,                   # rsv
-    255, 255, 255, 255, 255,      # tip: 最大弯曲
-]
-
-# 时间轴
-RELAX_DURATION = 0.6   # 放松用时
-HOLD_DURATION = 0.3    # 放松后停顿
-GRIP_DURATION = 0.4    # 抓紧用时
+_ref_gesture_params = load_static_gesture_params(
+    CANONICAL_SEMANTIC_HAND, "relax_grip")
+RELAX_ANGLES = list(_ref_gesture_params.relax_angles)
+GRIP_ANGLES = list(_ref_gesture_params.grip_angles)
+RELAX_DURATION = _ref_gesture_params.duration
+HOLD_DURATION = _ref_gesture_params.hold_duration
+GRIP_DURATION = _ref_gesture_params.grip_duration
 
 
 class RelaxGrip(HandGesturePrimitive):
-    """放松再抓紧：张开 → 停顿 → 握紧。
+    """放松再抓紧 — RelaxGripEngine + gestures 配置。"""
 
-    时间线:
-      0.0 ~ 0.6s  从当前位置插值到全张开 (放松)
-      0.6 ~ 0.9s  保持张开 (停顿)
-      0.9 ~ 1.3s  从张开插值到握紧
-      1.3s+       保持握紧，标记 done
-    """
+    def __init__(self) -> None:
+        self._engine: Optional[RelaxGripEngine] = None
+        self._hand_type = ""
+        self._done = False
 
     @property
     def name(self) -> str:
@@ -49,26 +33,22 @@ class RelaxGrip(HandGesturePrimitive):
 
     def on_enter(self, current_angles: List[float]) -> None:
         super().on_enter(current_angles)
+        self._engine = None
+        self._hand_type = ""
         self._done = False
+
+    def _ensure_engine(self, ctx: PrimitiveContext) -> RelaxGripEngine:
+        if self._engine is None or self._hand_type != ctx.hand_type:
+            engine = make_static_engine(ctx.hand_type, "relax_grip")
+            engine.reset(self._start_angles)
+            self._engine = engine
+            self._hand_type = ctx.hand_type
+        return self._engine
 
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
-        t_relax_end = RELAX_DURATION
-        t_hold_end = t_relax_end + HOLD_DURATION
-        t_grip_end = t_hold_end + GRIP_DURATION
-
-        if elapsed < t_relax_end:
-            t = elapsed / RELAX_DURATION
-            return self._move(lerp_angles(self._start_angles, RELAX_ANGLES, t))
-
-        elif elapsed < t_hold_end:
-            return self._move(list(RELAX_ANGLES))
-
-        elif elapsed < t_grip_end:
-            t = (elapsed - t_hold_end) / GRIP_DURATION
-            return self._move(lerp_angles(RELAX_ANGLES, GRIP_ANGLES, t))
-
-        else:
-            self._done = True
-            return self._move(list(GRIP_ANGLES))
+        engine = self._ensure_engine(ctx)
+        angles = engine.compute(elapsed)
+        self._done = engine.done
+        return self._move(angles)

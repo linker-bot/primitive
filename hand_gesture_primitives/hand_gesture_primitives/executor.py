@@ -23,8 +23,15 @@ from .primitive_base import (
     HAND_CONFIGS,
 )
 from .contact_config import ContactThresholds, load_contact_thresholds
+from .contact_detection import uses_torque_feedback
+from .contact_resolver import (
+    normalize_motor_torque_values,
+    parse_hand_info_currents,
+    parse_hand_info_torque,
+)
 from .fk_solver import create_fk_solver
 from .grasp_mapping import primitive_for_grasp_type
+from .hand_profile import HandProfile
 from .label_utils import normalize_label, select_best_bbox
 from .primitives.init_hand import InitHand
 from .topic_defaults import bboxes_3d_topic, labeled_poses_topic
@@ -49,6 +56,7 @@ class GestureExecutor:
         node: Node,
         hand_side: str,
         hand_type: str = "o20",
+        hand_profile: Optional[HandProfile] = None,
         tcp_pose_topic: str = "/tcp_pose",
         object_pose_topic: str = "/object_pose",
         bboxes_3d_topic: str = bboxes_3d_topic(),
@@ -67,12 +75,18 @@ class GestureExecutor:
         self._node = node
         self._side = hand_side
         self._hand_type = hand_type
+        self._profile = hand_profile
+        if hand_type not in HAND_CONFIGS:
+            raise ValueError(f"未知 hand_type: {hand_type}")
         self._hand_config = HAND_CONFIGS[hand_type]
-        self._contact_thresholds = contact_thresholds or load_contact_thresholds()
+        self._primitive_space_dim = (
+            20 if hand_type == "o6" else self._hand_config.num_joints
+        )
         self._active_primitive: Optional[HandGesturePrimitive] = None
         self._primitive_start_time: float = 0.0
-        self._current_angles: List[float] = [0.0] * self._hand_config.num_joints
+        self._current_angles: List[float] = [0.0] * self._primitive_space_dim
         self._last_target: List[float] = [0.0] * self._hand_config.num_joints
+        self._contact_thresholds = contact_thresholds or load_contact_thresholds()
 
         # 可达性检查参数
         self._reach_strict: bool = reach_strict
@@ -116,7 +130,7 @@ class GestureExecutor:
             10,
         )
 
-        # 订阅手部信息（电流/温度）
+        # 订阅手部信息（电流/温度/力矩）
         node.create_subscription(
             String,
             f"/cb_{hand_side}_hand_info",
@@ -303,7 +317,14 @@ class GestureExecutor:
 
     def suggested_primitive_name(self) -> str:
         """根据当前 grasp_type 推荐自适应原语名。"""
-        return primitive_for_grasp_type(self._grasp_type) or ''
+        if self._profile is not None:
+            prim = self._profile.primitive_for_grasp_type(self._grasp_type)
+            if prim:
+                return prim
+        prim = primitive_for_grasp_type(self._grasp_type)
+        if prim and self._profile is not None and not self._profile.is_primitive_supported(prim):
+            return ''
+        return prim or ''
 
     def _check_reachability(self) -> str:
         """检查手掌→目标可达性。返回空=通过, 非空=原因。"""
@@ -383,9 +404,38 @@ class GestureExecutor:
             self._active_primitive = None
 
     def _state_callback(self, msg: JointState) -> None:
-        if len(msg.position) == self._hand_config.num_joints:
+        n = len(msg.position)
+        if self._hand_type == "o6" and self._profile is not None:
+            if n == self._profile.hardware.num_joints:
+                self._current_angles = self._profile.hardware.from_hardware(
+                    list(msg.position))
+                self._hand_state_received = True
+            return
+        if n == self._hand_config.num_joints:
             self._current_angles = list(msg.position)
             self._hand_state_received = True
+
+    def _semantic_to_hardware(self, semantic: List[float]) -> List[float]:
+        """原语关节空间 → 驱动发布向量。"""
+        o20 = list(semantic[:20])
+        while len(o20) < 20:
+            o20.append(0.0)
+        for i in RESERVED_INDICES:
+            o20[i] = 0.0
+        if self._hand_type == "o6" and self._profile is not None:
+            hw = self._profile.hardware.to_hardware(o20)
+            return [max(0.0, min(255.0, v)) for v in hw]
+        n = self._hand_config.num_joints
+        target = list(o20)
+        if len(target) < n:
+            target.extend([0.0] * (n - len(target)))
+        target = target[:n]
+        for i in self._hand_config.reserved_indices:
+            if i < len(target):
+                target[i] = 0.0
+        if self._hand_config.invert_angles:
+            target = [255.0 - v for v in target]
+        return [max(0.0, min(255.0, v)) for v in target]
 
     def _log_primitive_context(self, primitive_name: str) -> None:
         """原语切换时输出感知/驱动上下文，便于排查静默不执行。"""
@@ -429,10 +479,16 @@ class GestureExecutor:
     def _log_motion_started(self, primitive_name: str, target: List[float]) -> None:
         if self._motion_logged:
             return
-        n = min(len(target), len(self._current_angles))
+        if self._hand_type == "o6" and self._profile is not None:
+            hw_current = self._profile.hardware.to_hardware(
+                list(self._current_angles[:20]))
+            compare = hw_current
+        else:
+            compare = self._current_angles
+        n = min(len(target), len(compare))
         if n == 0:
             return
-        delta = max(abs(target[i] - self._current_angles[i]) for i in range(n))
+        delta = max(abs(target[i] - compare[i]) for i in range(n))
         if delta < 1.0:
             return
         self._node.get_logger().info(
@@ -446,16 +502,35 @@ class GestureExecutor:
             data = json.loads(msg.data)
         except (json.JSONDecodeError, ValueError):
             return
-        currents = data.get("current_current", [])
-        if len(currents) != self._hand_config.num_joints:
+        n = self._hand_config.num_joints
+        currents = parse_hand_info_currents(data, n)
+        torques = (
+            parse_hand_info_torque(data, n)
+            if uses_torque_feedback(self._hand_type) else None
+        )
+        if currents is None and torques is None:
             return
-        self._joint_currents = [float(c) for c in currents]
+
+        if currents is not None:
+            # SDK 未收到 CAN 0x36 前为 -1；仅更新有效采样，保留上帧值
+            for i, c in enumerate(currents):
+                if c >= 0:
+                    self._joint_currents[i] = c
+
+        if torques is not None:
+            if self._joint_torque is None:
+                self._joint_torque = np.full(n, -1.0, dtype=np.float64)
+            for i, t in enumerate(torques):
+                if t >= 0:
+                    self._joint_torque[i] = t
         now = time.monotonic()
         SKIP_OVERLOAD = {self._hand_config.thumb_rot}
         reserved = set(self._hand_config.reserved_indices)
         overload = self._contact_thresholds.overload_threshold
         overload_duration = self._contact_thresholds.overload_duration_sec
-        for i, c in enumerate(currents):
+        for i, c in enumerate(self._joint_currents):
+            if c < 0:
+                continue
             if i in reserved or i in SKIP_OVERLOAD:
                 continue
             if c > overload:
@@ -604,12 +679,15 @@ class GestureExecutor:
         self._contact_detected = bool(np.any(pressure > threshold))
 
     def _torque_callback(self, msg: Float32MultiArray) -> None:
-        """SDK motor_torque: 每关节力矩值。"""
-        if len(msg.data) >= 5:
-            self._joint_torque = np.array(
-                msg.data[:NUM_JOINTS] if len(msg.data) >= NUM_JOINTS else msg.data,
-                dtype=np.float64,
-            )
+        """motor_torque topic：O6 官方 0~100%；hand_info 已有有效值时不覆盖。"""
+        n = self._hand_config.num_joints
+        normalized = normalize_motor_torque_values(list(msg.data), n)
+        if normalized is None:
+            return
+        if uses_torque_feedback(self._hand_type):
+            if self._joint_torque is not None and np.any(self._joint_torque >= 0):
+                return
+        self._joint_torque = np.array(normalized, dtype=np.float64)
 
     def _tick(self) -> None:
         # FK 指尖位置计算
@@ -655,18 +733,7 @@ class GestureExecutor:
                     self._current_angles, elapsed, ctx
                 )
                 if result.feasible:
-                    target = result.target_angles
-                    for i in self._hand_config.reserved_indices:
-                        target[i] = 0.0
-                    # 补齐到 num_joints 长度
-                    n = self._hand_config.num_joints
-                    if len(target) < n:
-                        target.extend([0.0] * (n - len(target)))
-                    target = target[:n]
-                    # L25 角度方向与 O20 相反: 255→0, 0→255
-                    if self._hand_config.invert_angles:
-                        target = [255.0 - v for v in target]
-                    self._last_target = [max(0.0, min(255.0, v)) for v in target]
+                    self._last_target = self._semantic_to_hardware(result.target_angles)
                     self._log_motion_started(self._active_primitive.name, self._last_target)
                 else:
                     self._log_infeasible_hold(
@@ -710,10 +777,22 @@ class GestureExecutor:
                 )
             else:
                 p_str = "none(current-fallback)"
+            feedback = (
+                "tactile" if (
+                    self._tactile_mode != "none" and self._tactile_pressure is not None
+                ) else "current"
+            )
+            stopped = getattr(getattr(prim, "_engine", None), "_stopped", None)
+            if stopped is None:
+                stopped = getattr(prim, "_stopped", None)
+            stopped_str = (
+                f" stopped={sorted(k for k, v in stopped.items() if v)}"
+                if isinstance(stopped, dict) and any(stopped.values()) else ""
+            )
             self._node.get_logger().info(
                 f"[{prim.name}] grasp={grasp_state} | "
-                f"tactile={p_str} mode={self._tactile_mode} "
-                f"contact={self._contact_detected}"
+                f"feedback={feedback} tactile={p_str} mode={self._tactile_mode} "
+                f"contact={self._contact_detected}{stopped_str}"
             )
 
     _FINGERTIP_COLORS = [
@@ -757,8 +836,8 @@ class GestureExecutor:
         msg.header.stamp = self._node.get_clock().now().to_msg()
         msg.name = list(JOINT_NAMES) if self._hand_type == "o20" else [f"j{i}" for i in range(self._hand_config.num_joints)]
         msg.position = [float(a) for a in angles]
-        msg.velocity = [0.0] * self._hand_config.num_joints
-        msg.effort = [0.0] * self._hand_config.num_joints
+        # 勿填 effort/velocity：linker_hand_sdk 会把 effort 当作 set_torque，
+        # 全 0 会覆盖 teach 力矩导致手无法运动。
         self._cmd_pub.publish(msg)
 
     def _publish_result(self) -> None:

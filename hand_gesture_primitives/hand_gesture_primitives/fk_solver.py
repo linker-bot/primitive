@@ -126,6 +126,8 @@ class HandFKSolver:
         side_overrides = fk_config.get("side_overrides", {}).get(self._hand_side)
         if side_overrides:
             fk_config = dict(fk_config)
+            if "base_link" in side_overrides:
+                fk_config["base_link"] = side_overrides["base_link"]
             if "fingertip_links" in side_overrides:
                 fk_config["fingertip_links"] = side_overrides["fingertip_links"]
             if "invert_joints" in side_overrides:
@@ -375,6 +377,7 @@ _HAND_JOINT_TO_FK_MODEL = {
     "L25": "l25",
     "L20": "l20",
     "O20": "o20",
+    "O6": "o6",
 }
 
 

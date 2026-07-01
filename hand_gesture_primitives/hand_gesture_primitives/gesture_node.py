@@ -12,6 +12,12 @@ from std_msgs.msg import String
 from .contact_config import ContactThresholds, load_contact_thresholds
 from .executor import GestureExecutor
 from .grasp_mapping import GRASP_TYPE_TO_PRIMITIVE, primitive_for_grasp_type
+from .hand_profile import (
+    HandProfile,
+    format_reject_message,
+    load_hand_profile,
+    list_configured_hand_joints,
+)
 from .label_utils import normalize_label
 from .primitive_base import GRASP_PHASES, PHASED_GRASP_PRIMITIVES
 from .grasp_gate import GATED_PRIMITIVES
@@ -146,14 +152,24 @@ class GestureNode(Node):
             self.get_logger().error(f"hand_side 参数无效: '{self._side}'，必须为 left 或 right")
             raise ValueError(f"Invalid hand_side: {self._side}")
 
-        if self._hand_type not in ("o20", "l25"):
-            self.get_logger().error(f"hand_type 参数无效: '{self._hand_type}'，必须为 o20 或 l25")
-            raise ValueError(f"Invalid hand_type: {self._hand_type}")
+        try:
+            self._profile = load_hand_profile(self._hand_type)
+        except FileNotFoundError as exc:
+            available = list_configured_hand_joints()
+            self.get_logger().error(
+                f"hand_type 无效: '{self._hand_type}'，"
+                f"未找到 config/{{hand}}.yaml；可用: {available}")
+            raise ValueError(str(exc)) from exc
 
-        self.get_logger().info(f"手势节点启动: side={self._side}, hand_type={self._hand_type}")
+        self._hand_type = self._profile.hand_type
+
+        self.get_logger().info(
+            f"手势节点启动: side={self._side}, hand_type={self._hand_type}")
+        for line in self._profile.summary_lines():
+            self.get_logger().info(line)
         n_prims = len(PRIMITIVE_REGISTRY)
         self.get_logger().info(
-            f"已注册原语 ({n_prims}): {list(PRIMITIVE_REGISTRY.keys())}"
+            f"全局已注册原语 ({n_prims}): {sorted(PRIMITIVE_REGISTRY.keys())}"
         )
         self.get_logger().info(
             f"包络门控原语 ({len(GATED_PRIMITIVES)}): {sorted(GATED_PRIMITIVES)}"
@@ -173,6 +189,7 @@ class GestureNode(Node):
             self,
             self._side,
             hand_type=self._hand_type,
+            hand_profile=self._profile,
             tcp_pose_topic=tcp_topic,
             object_pose_topic=obj_topic,
             bboxes_3d_topic=bboxes_topic,
@@ -203,12 +220,26 @@ class GestureNode(Node):
         self._status_override = message
         self._status_override_until = time.monotonic() + self._STATUS_OVERRIDE_SEC
 
+    def _report_primitive_reject(self, prim_name: str, reason: str) -> None:
+        """记录并发布原语被拒绝的用户可读说明。"""
+        user_msg = self._profile.reject_user_message(prim_name)
+        if not user_msg:
+            user_msg = format_reject_message(
+                self._profile.hand_joint,
+                self._hand_type,
+                reason,
+                num_joints=self._profile.hardware.num_joints,
+            )
+        self.get_logger().warn(f"{user_msg} [{reason}]")
+        self._set_status_override(user_msg)
+
     def _cmd_callback(self, msg: String) -> None:
         parts = msg.data.strip().lower().split()
         if not parts:
             return
         cmd = parts[0]
         args = parts[1:]
+        cmd = self._profile.resolve_primitive_name(cmd)
         self.get_logger().info(f"收到指令: '{msg.data.strip()}' (topic: /hand_gesture_cmd_exec)")
 
         if cmd == "stop":
@@ -259,6 +290,14 @@ class GestureNode(Node):
             if primitive_cls is None:
                 self.get_logger().error(f"映射原语未注册: {prim_name}")
                 return
+            reject = self._profile.reject_reason(prim_name)
+            if reject.startswith(
+                ("unknown_primitive", "unsupported_on_", "not_in_allowlist", "capability_missing")
+            ):
+                self._report_primitive_reject(prim_name, reject)
+                return
+            if reject.startswith("capability_warning:"):
+                self.get_logger().warn(f"原语能力警告: {reject}")
             phase_info = f", phase={phase}" if prim_name in PHASED_GRASP_PRIMITIVES else ""
             self.get_logger().info(
                 f"auto: grasp_type={self._executor.grasp_type} → {prim_name}{phase_info}"
@@ -281,11 +320,22 @@ class GestureNode(Node):
         primitive_cls = PRIMITIVE_REGISTRY.get(cmd)
         if primitive_cls is None:
             hint = self._unknown_primitive_hint(cmd)
+            supported = self._profile.supported_primitives()
             self.get_logger().warn(
-                f"未知原语指令: '{cmd}'，可用: {list(PRIMITIVE_REGISTRY.keys()) + ['auto']}"
+                f"未知原语指令: '{cmd}'，"
+                f"本手型支持: {supported}；全局: {sorted(PRIMITIVE_REGISTRY.keys()) + ['auto']}"
                 + (f"；{hint}" if hint else "")
             )
             return
+
+        reject = self._profile.reject_reason(cmd)
+        if reject.startswith(
+            ("unknown_primitive", "unsupported_on_", "not_in_allowlist", "capability_missing")
+        ):
+            self._report_primitive_reject(cmd, reject)
+            return
+        if reject.startswith("capability_warning:"):
+            self.get_logger().warn(f"原语能力警告: {reject}")
 
         phase, target_label, prim_args = self._parse_primitive_args(cmd, args)
 
@@ -356,7 +406,7 @@ class GestureNode(Node):
             active = self._executor.active_primitive_name
             grasp_state = self._executor.grasp_state
             grasp = self._executor.grasp_type
-            suggested = primitive_for_grasp_type(grasp) if grasp else ''
+            suggested = self._profile.primitive_for_grasp_type(grasp) if grasp else ''
             parts = [active]
             if grasp_state:
                 parts.append(f"grasp={grasp_state}")

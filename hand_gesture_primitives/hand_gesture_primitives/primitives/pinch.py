@@ -1,50 +1,91 @@
-"""捏合手势原语 — 拇指与食指对捏。"""
+"""捏合手势原语 — 拇指与食指对捏。
 
-from typing import List
+O6：timed lerp + 压感/堵转力矩停指。
+O20/L25：gestures 默认 / YAML + StaticPoseEngine。
+"""
 
-from ..primitive_base import (
-    HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
-    lerp_angles, ABD_NEUTRAL,
+import logging
+from typing import List, Optional
+
+from ..contact_detection import (
+    capture_feedback_baseline,
+    pinch_motion_should_stop,
+    pinch_motion_stop_detail,
 )
+from ..contact_resolver import current_monitor_indices
+from ..gesture_engine import StaticPoseEngine, make_static_engine
+from ..gesture_params import CANONICAL_SEMANTIC_HAND, load_static_gesture_params
+from ..hand_config import HandConfig
+from ..primitive_base import HandGesturePrimitive, PrimitiveContext, PrimitiveResult
 
-# 捏合: 拇指弯曲+旋转对向食指，食指弯曲，其余伸直
-PINCH_ANGLES = [
-    180,        # [0]  thumb_base: 中等弯曲 (~85°)
-    180,        # [1]  index_base: 中等弯曲 (~180°)
-    0,          # [2]  middle_base: 伸直
-    0,          # [3]  ring_base: 伸直
-    0,          # [4]  pinky_base: 伸直
-    130,        # [5]  thumb_abd: 侧摆内收 (~92°)
-    ABD_NEUTRAL,  # [6]  index_abd: 中立
-    ABD_NEUTRAL,  # [7]  middle_abd: 中立
-    ABD_NEUTRAL,  # [8]  ring_abd: 中立
-    ABD_NEUTRAL,  # [9]  pinky_abd: 中立
-    200,        # [10] thumb_rot: 旋转对向食指 (~102°)
-    0, 0, 0, 0,  # [11-14] rsv
-    180,        # [15] thumb_tip: 弯曲 (~106°)
-    180,        # [16] index_tip: 弯曲 (~127°)
-    0,          # [17] middle_tip: 伸直
-    0,          # [18] ring_tip: 伸直
-    0,          # [19] pinky_tip: 伸直
-]
+_logger = logging.getLogger(__name__)
+
+_ref_gesture_params = load_static_gesture_params(CANONICAL_SEMANTIC_HAND, "pinch")
+PINCH_ANGLES = list(_ref_gesture_params.target_angles)
+TRANSITION_DURATION = _ref_gesture_params.duration
 
 
 class Pinch(HandGesturePrimitive):
-    """拇指与食指对捏。"""
+    """拇指与食指对捏 — StaticPoseEngine + 压感/堵转停指。"""
 
-    TRANSITION_DURATION = 0.5
+    def __init__(self) -> None:
+        self._engine: Optional[StaticPoseEngine] = None
+        self._hand_type = ""
+        self._frozen_pose: Optional[List[float]] = None
+        self._baseline: Optional[List[float]] = None
 
     @property
     def name(self) -> str:
         return "pinch"
 
+    def on_enter(self, current_angles: List[float]) -> None:
+        super().on_enter(current_angles)
+        self._engine = None
+        self._hand_type = ""
+        self._frozen_pose = None
+        self._baseline = None
+
+    def _ensure_engine(self, ctx: PrimitiveContext) -> StaticPoseEngine:
+        if self._engine is None or self._hand_type != ctx.hand_type:
+            engine = make_static_engine(ctx.hand_type, "pinch")
+            engine.reset(self._start_angles)
+            self._engine = engine
+            self._hand_type = ctx.hand_type
+        return self._engine
+
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
-        t = elapsed / self.TRANSITION_DURATION
-        if t >= 1.0:
-            return self._move(list(PINCH_ANGLES))
-        return self._move(lerp_angles(self._start_angles, PINCH_ANGLES, t))
+        if self._frozen_pose is not None:
+            return self._move(list(self._frozen_pose))
+
+        engine = self._ensure_engine(ctx)
+        duration = max(engine._params.duration, 1e-6)
+        progress = min(elapsed / duration, 1.0)
+        target = engine.compute(elapsed)
+
+        hw = current_monitor_indices(HandConfig(ctx.hand_type), "pinch")
+        if not hw:
+            return self._move(target)
+
+        if self._baseline is None:
+            self._baseline = capture_feedback_baseline(ctx)
+
+        stop, reason = pinch_motion_should_stop(
+            ctx, hw, [0, 1],
+            lerp_progress=progress,
+            baseline=self._baseline,
+        )
+        if stop:
+            self._frozen_pose = list(current_angles)
+            detail = pinch_motion_stop_detail(ctx, hw, [0, 1], self._baseline)
+            _logger.warning(
+                "pinch: 停指 reason=%s progress=%.0f%% | %s",
+                reason, progress * 100.0, detail,
+            )
+            return self._move(list(self._frozen_pose))
+
+        return self._move(target)
 
     @property
     def done(self) -> bool:

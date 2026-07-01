@@ -74,6 +74,10 @@ class HandConfig:
             for k, v in cal_data.items()
         }
 
+        # 原语超参覆盖: prim_name → {param_name: value}
+        # 值以硬件约定存储，get_primitive_params() 时自动转为 O20
+        self._primitive_params: dict = data.get("primitive_params", {})
+
         # 身份映射快捷标志 (O20 无需转换)
         self._is_identity = (
             self._num_joints == 20
@@ -103,6 +107,22 @@ class HandConfig:
     @property
     def is_identity(self) -> bool:
         return self._is_identity
+
+    def get_primitive_params(self, name: str) -> dict:
+        """返回当前手型下指定原语的超参覆盖 (已转为 O20 内部表示)。
+
+        无覆盖时返回空 dict，原语使用自己的 O20 默认值。
+        """
+        raw = self._primitive_params.get(name, {})
+        if not raw:
+            return {}
+        result = {}
+        for key, value in raw.items():
+            if key.endswith("_angles") and isinstance(value, list) and len(value) == self._num_joints:
+                result[key] = self.from_hardware(value)
+            else:
+                result[key] = value
+        return result
 
     def to_hardware(self, o20_angles: List[float]) -> List[float]:
         """O20 20-DOF 内部表示 → 硬件指令。"""

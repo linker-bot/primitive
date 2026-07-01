@@ -1,50 +1,48 @@
-"""OK手势原语 — 拇指与食指捏成圆圈，其余三指伸直张开。"""
+"""OK手势原语 — 拇指与食指捏成圆圈，其余三指伸直张开。
 
-from typing import List
+O6：config 静态 MCP 姿态 + StaticPoseEngine（拇+食 MCP 近似圆环）。
+O20/L25：gestures 默认 / YAML + StaticPoseEngine（行为与历史 OK_ANGLES 一致）。
+"""
 
-from ..primitive_base import (
-    HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
-    lerp_angles, ABD_NEUTRAL,
-)
+from typing import List, Optional
 
-# OK手势: 拇指与食指指尖对捏成圆，中指/无名指/小指伸直
-OK_ANGLES = [
-    0,         # [0]  thumb_base: 很轻微弯曲
-    150,        # [1]  index_base: 适度弯曲
-    100,        # [2]  middle_base: 弯曲
-    70,         # [3]  ring_base: 中等弯曲
-    40,         # [4]  pinky_base: 轻微弯曲
-    170,        # [5]  thumb_abd: 往掌心偏移，微调右移
-    ABD_NEUTRAL,  # [6]  index_abd: 中立
-    ABD_NEUTRAL,  # [7]  middle_abd: 中立
-    ABD_NEUTRAL,  # [8]  ring_abd: 中立
-    ABD_NEUTRAL,  # [9]  pinky_abd: 中立
-    220,        # [10] thumb_rot: 大幅旋转对准食指
-    0, 0, 0, 0,  # [11-14] rsv
-    200,        # [15] thumb_tip: 指尖适度弯曲
-    100,        # [16] index_tip: 指尖很轻微弯曲
-    100,        # [17] middle_tip: 弯曲
-    70,         # [18] ring_tip: 中等弯曲
-    40,         # [19] pinky_tip: 轻微弯曲
-]
+from ..gesture_engine import StaticPoseEngine, make_static_engine
+from ..gesture_params import CANONICAL_SEMANTIC_HAND, load_static_gesture_params
+from ..primitive_base import HandGesturePrimitive, PrimitiveContext, PrimitiveResult
+
+_ref_gesture_params = load_static_gesture_params(CANONICAL_SEMANTIC_HAND, "ok_sign")
+OK_ANGLES = list(_ref_gesture_params.target_angles)
+TRANSITION_DURATION = _ref_gesture_params.duration
 
 
 class OkSign(HandGesturePrimitive):
-    """拇指与食指捏圆，其余三指伸直。"""
+    """拇指与食指捏圆，其余三指伸直 — StaticPoseEngine + gestures 配置。"""
 
-    TRANSITION_DURATION = 0.6
+    def __init__(self) -> None:
+        self._engine: Optional[StaticPoseEngine] = None
+        self._hand_type = ""
 
     @property
     def name(self) -> str:
         return "ok_sign"
 
+    def on_enter(self, current_angles: List[float]) -> None:
+        super().on_enter(current_angles)
+        self._engine = None
+        self._hand_type = ""
+
+    def _ensure_engine(self, ctx: PrimitiveContext) -> StaticPoseEngine:
+        if self._engine is None or self._hand_type != ctx.hand_type:
+            engine = make_static_engine(ctx.hand_type, "ok_sign")
+            engine.reset(self._start_angles)
+            self._engine = engine
+            self._hand_type = ctx.hand_type
+        return self._engine
+
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
-        t = elapsed / self.TRANSITION_DURATION
-        if t >= 1.0:
-            return self._move(list(OK_ANGLES))
-        return self._move(lerp_angles(self._start_angles, OK_ANGLES, t))
+        return self._move(self._ensure_engine(ctx).compute(elapsed))
 
     @property
     def done(self) -> bool:
