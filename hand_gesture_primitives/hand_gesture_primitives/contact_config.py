@@ -20,6 +20,12 @@ class ContactThresholds:
     current_delta_narrow: float = 250.0
     current_settle_frames: int = 10
     hold_safe_current: float = 800.0
+    # O6 hand.torque：0~100 无量纲%（100≈1657.5mA）
+    torque_delta_pct: float = 15.0
+    hold_safe_torque_pct: float = 55.0
+    pinch_torque_stop_pct: float = 15.0
+    # 静态 pinch 堵转：绝对力矩超过此值才停（空载 lerp 不误触）
+    pinch_stall_torque_pct: float = 50.0
     overload_threshold: float = 1000.0
     overload_duration_sec: float = 2.0
 
@@ -71,6 +77,13 @@ def load_contact_thresholds(config_path: Optional[str] = None) -> ContactThresho
         current_delta_narrow=float(_get("current_delta_narrow", defaults.current_delta_narrow)),
         current_settle_frames=int(_get("current_settle_frames", defaults.current_settle_frames)),
         hold_safe_current=float(_get("hold_safe_current", defaults.hold_safe_current)),
+        torque_delta_pct=float(_get("torque_delta_pct", defaults.torque_delta_pct)),
+        hold_safe_torque_pct=float(
+            _get("hold_safe_torque_pct", defaults.hold_safe_torque_pct)),
+        pinch_torque_stop_pct=float(
+            _get("pinch_torque_stop_pct", defaults.pinch_torque_stop_pct)),
+        pinch_stall_torque_pct=float(
+            _get("pinch_stall_torque_pct", defaults.pinch_stall_torque_pct)),
         overload_threshold=float(_get("overload_threshold", defaults.overload_threshold)),
         overload_duration_sec=float(_get("overload_duration_sec", defaults.overload_duration_sec)),
     )

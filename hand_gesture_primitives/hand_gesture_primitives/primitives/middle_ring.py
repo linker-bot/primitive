@@ -1,8 +1,7 @@
-"""中指环形包络原语 — 拇指与中指上下错开，同时力控闭合自适应抓取。
+"""中指环形包络原语 — 拇指与中指力控闭合自适应抓取。
 
-两阶段算法:
-1. 预成型 (Pre-shape): 根据物体尺寸自动选择 thumb_rot，快速 lerp 到预备姿态
-2. 同时力控闭合: 中指和拇指同时收紧，各自独立检测接触后停止
+O6：config sequential_force_close + SequentialForceCloseEngine（MCP 力控）。
+O20/L25：legacy tip+rot 力控路径不变。
 """
 
 import logging
@@ -13,6 +12,8 @@ from typing import List, Optional
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from ..gesture_engine import SequentialForceCloseEngine, make_middle_ring_engine
+from ..gesture_params import load_middle_ring_params
 from ..primitive_base import (
     HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
     lerp_angles, ABD_NEUTRAL, HAND_CONFIGS, HandConfig,
@@ -89,17 +90,14 @@ class _Phase(Enum):
 
 
 class MiddleRing(HandGesturePrimitive):
-    """拇指与中指上下错开、同时力控闭合抓取。
+    """拇指与中指力控闭合抓取。
 
-    自动根据物体形状选择 thumb_rot（上下错开距离）：
-    - 有 TCP 真实位姿时：沿夹取轴计算物体投影宽度
-    - 无 TCP 时：用物体 bounding box 最短边估计
-    - 无 mesh 时：使用默认值
-
-    支持 O20 (20-DOF) 和 L25 (25-DOF) 两种手型，通过 ctx.hand_type 自动切换。
+    O6 为 MCP 顺序力控包络；O20/L25 保留独立指尖 + thumb_rot 算法。
     """
 
     def __init__(self):
+        self._engine: Optional[SequentialForceCloseEngine] = None
+        self._engine_hand_type: str = ""
         self._phase = _Phase.PRESHAPE
         self._close_angles: List[float] = []
         self._baseline_currents: List[float] = []
@@ -113,8 +111,26 @@ class MiddleRing(HandGesturePrimitive):
     def name(self) -> str:
         return "middle_ring"
 
+    @property
+    def grasp_state(self) -> str:
+        if self._engine is not None:
+            return self._engine.grasp_state
+        return "approaching"
+
+    def _ensure_engine(self, ctx: PrimitiveContext) -> SequentialForceCloseEngine:
+        if self._engine is None or self._engine_hand_type != ctx.hand_type:
+            self._engine = make_middle_ring_engine(ctx.hand_type)
+            if self._engine is None:
+                raise RuntimeError(
+                    f"middle_ring config engine missing for {ctx.hand_type}")
+            self._engine.reset(self._start_angles)
+            self._engine_hand_type = ctx.hand_type
+        return self._engine
+
     def on_enter(self, current_angles: List[float]) -> None:
         super().on_enter(current_angles)
+        self._engine = None
+        self._engine_hand_type = ""
         self._phase = _Phase.PRESHAPE
         self._baseline_currents = [0.0] * len(current_angles)
         self._settle_count = 0
@@ -122,6 +138,15 @@ class MiddleRing(HandGesturePrimitive):
         self._thumb_stopped = False
         self._thumb_rot = None
         self._cfg = None
+
+    def compute(
+        self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
+    ) -> PrimitiveResult:
+        if load_middle_ring_params(ctx.hand_type) is not None:
+            engine = self._ensure_engine(ctx)
+            raw = engine.compute(elapsed, ctx)
+            return self._move(raw)
+        return self._compute_legacy(current_angles, elapsed, ctx)
 
     def _get_cfg(self, ctx: PrimitiveContext) -> HandConfig:
         if self._cfg is None:
@@ -198,7 +223,7 @@ class MiddleRing(HandGesturePrimitive):
                 angles[idx] = cfg.abd_neutral
         return angles
 
-    def compute(
+    def _compute_legacy(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
         cfg = self._get_cfg(ctx)

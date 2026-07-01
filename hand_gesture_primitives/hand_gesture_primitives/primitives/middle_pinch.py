@@ -1,59 +1,40 @@
-"""中指捏取原语 — 拇指与中指指尖对捏。
+"""中指捏取原语 — 拇指与中指对捏。
 
-抓取类型: 1 vs 3 (拇指 vs 中指)
-
-适用场景: 需要食指保持自由（如指向、按压其他按钮）的同时捏取物体。
-拇指与中指指尖对捏，食指伸直外展远离捏合区域，无名指和小指自然弯曲避让。
+O6：timed lerp + 压感/堵转力矩停指（空载不用 Δ，避免误触 done）。
+O20/L25：gestures 默认 + StaticPoseEngine，电流/触觉力反馈停指。
 """
 
 import logging
 from typing import List, Optional
 
-import numpy as np
-from scipy.spatial.transform import Rotation
-
-from ..primitive_base import (
-    HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
-    lerp_angles, ABD_NEUTRAL,
+from ..contact_detection import (
+    capture_feedback_baseline,
+    pinch_motion_should_stop,
+    pinch_motion_stop_detail,
 )
+from ..contact_resolver import current_monitor_indices
+from ..gesture_engine import StaticPoseEngine, make_static_engine
+from ..gesture_params import CANONICAL_SEMANTIC_HAND, load_static_gesture_params
+from ..hand_config import HandConfig
+from ..primitive_base import HandGesturePrimitive, PrimitiveContext, PrimitiveResult
 
 _logger = logging.getLogger(__name__)
 
-# 力反馈: 活动关节电流(绝对值, mA)超过此阈值 → 停止闭合并完成
-CURRENT_STOP_THRESHOLD = 400
-
-REACH_THRESHOLD = 0.15
-PALM_FORWARD_MIN = 0.02
-PALM_FORWARD_MAX = 0.15
-
-# 中指捏合: 拇指旋转对向中指，中指弯曲对捏，食指外展避让
-MIDDLE_PINCH_ANGLES = [
-    120,        # [0]  thumb_base: 适度弯曲 (~56°)
-    0,          # [1]  index_base: 伸直避让
-    140,        # [2]  middle_base: 适度弯曲 (~99°)
-    0,          # [3]  ring_base: 轻微弯曲避让
-    0,          # [4]  pinky_base: 轻微弯曲避让
-    190,        # [5]  thumb_abd: 内收 (~92°)
-    200,        # [6]  index_abd: 外展远离中指 (~+28°)
-    ABD_NEUTRAL,  # [7]  middle_abd: 中立
-    ABD_NEUTRAL,  # [8]  ring_abd: 中立
-    ABD_NEUTRAL,  # [9]  pinky_abd: 中立
-    185,        # [10] thumb_rot: 旋转对向中指 (~94°)
-    0, 0, 0, 0,  # [11-14] rsv
-    160,        # [15] thumb_tip: 指尖弯曲 (~94°)
-    0,          # [16] index_tip: 伸直
-    130,        # [17] middle_tip: 指尖弯曲对捏 (~92°)
-    0,          # [18] ring_tip: 轻微弯曲
-    0,          # [19] pinky_tip: 轻微弯曲
-]
+_ref_gesture_params = load_static_gesture_params(
+    CANONICAL_SEMANTIC_HAND, "middle_pinch")
+MIDDLE_PINCH_ANGLES = list(_ref_gesture_params.target_angles)
+TRANSITION_DURATION = _ref_gesture_params.duration
 
 
 class MiddlePinch(HandGesturePrimitive):
-    """拇指与中指指尖对捏，食指伸直外展避让。"""
+    """拇指与中指对捏 — StaticPoseEngine + 压感/堵转停指。"""
 
-    TRANSITION_DURATION = 0.5
-    # 监测关节: thumb_base, thumb_tip, middle_base, middle_tip
-    _MONITORED = (0, 15, 2, 17)
+    def __init__(self) -> None:
+        self._engine: Optional[StaticPoseEngine] = None
+        self._hand_type = ""
+        self._frozen_pose: Optional[List[float]] = None
+        self._baseline: Optional[List[float]] = None
+        self._done = False
 
     @property
     def name(self) -> str:
@@ -61,28 +42,48 @@ class MiddlePinch(HandGesturePrimitive):
 
     def on_enter(self, current_angles: List[float]) -> None:
         super().on_enter(current_angles)
-        self._frozen_pose: Optional[List[float]] = None
+        self._engine = None
+        self._hand_type = ""
+        self._frozen_pose = None
+        self._baseline = None
         self._done = False
+
+    def _ensure_engine(self, ctx: PrimitiveContext) -> StaticPoseEngine:
+        if self._engine is None or self._hand_type != ctx.hand_type:
+            engine = make_static_engine(ctx.hand_type, "middle_pinch")
+            engine.reset(self._start_angles)
+            self._engine = engine
+            self._hand_type = ctx.hand_type
+        return self._engine
 
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
-        # 本帧闭合目标
-        t = elapsed / self.TRANSITION_DURATION
-        if t >= 1.0:
-            target = list(MIDDLE_PINCH_ANGLES)
-        else:
-            target = lerp_angles(self._start_angles, MIDDLE_PINCH_ANGLES, t)
+        if self._frozen_pose is not None:
+            return self._move(list(self._frozen_pose))
 
-        # 力反馈: 拇指+中指任一关节电流(绝对值)超阈值 → 冻结姿态并完成
-        currents = ctx.joint_currents
-        if any(i < len(currents) and currents[i] > CURRENT_STOP_THRESHOLD
-               for i in self._MONITORED):
-            if self._frozen_pose is None:
-                self._frozen_pose = list(target)
-                self._done = True
-                _logger.warning(
-                    "middle_pinch: 电流>%dma，停止闭合并保持(done)", CURRENT_STOP_THRESHOLD)
+        engine = self._ensure_engine(ctx)
+        duration = max(engine._params.duration, 1e-6)
+        progress = min(elapsed / duration, 1.0)
+        target = engine.compute(elapsed)
+
+        hw = current_monitor_indices(HandConfig(ctx.hand_type), "middle_pinch")
+        if self._baseline is None:
+            self._baseline = capture_feedback_baseline(ctx)
+
+        stop, reason = pinch_motion_should_stop(
+            ctx, hw, [0, 2],
+            lerp_progress=progress,
+            baseline=self._baseline,
+        )
+        if stop:
+            self._frozen_pose = list(current_angles)
+            self._done = True
+            detail = pinch_motion_stop_detail(ctx, hw, [0, 2], self._baseline)
+            _logger.warning(
+                "middle_pinch: 停指 reason=%s progress=%.0f%% | %s",
+                reason, progress * 100.0, detail,
+            )
             return self._move(list(self._frozen_pose))
 
         return self._move(target)

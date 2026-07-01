@@ -131,6 +131,19 @@ HAND_CONFIGS: Dict[str, HandConfig] = {
         reserved_indices=[],
         invert_angles=True,
     ),
+    "o6": HandConfig(
+        num_joints=6,
+        thumb_base=0,     thumb_abd=1,     thumb_rot=-1,   thumb_tip=-1,
+        thumb_root2=-1,
+        index_base=2,     index_tip=-1,    index_abd=-1,
+        middle_base=3,    middle_tip=-1,   middle_root2=-1,
+        ring_base=4,      ring_tip=-1,
+        pinky_base=5,     pinky_tip=-1,
+        abd_neutral=128,
+        abd_indices=[],
+        reserved_indices=[],
+        invert_angles=False,
+    ),
 }
 
 

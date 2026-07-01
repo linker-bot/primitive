@@ -5,6 +5,7 @@
 [![ROS2 Jazzy](https://img.shields.io/badge/ROS2-Jazzy-blue)](https://docs.ros.org/en/jazzy/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Hand: O20](https://img.shields.io/badge/Hand-O20-orange)](https://github.com/linker-bot/linkerhand-o20-ros2)
+[![Hand: O6](https://img.shields.io/badge/Hand-O6-blue)](https://github.com/linker-bot/linkerhand-o6-ros2)
 
 当前绝大多数自动化产线、小型机器人平台仍普遍采用简易二指爪夹作为末端执行器，反观五指灵巧手虽具备高自由度与丰富接触形态，但在真实产线、实验室和桌面操作场景中，**从「能动手」到「稳定抓得准」** 之间仍隔着一道工程鸿沟：关节空间复杂、感知噪声大、抓取策略难以复用。本项目由灵心巧手算法团队研发推出，针对灵巧手落地难、控制繁琐的工程痛点开展优化迭代。
 
@@ -12,10 +13,6 @@
 
 本项目基于 ROS2 Jazzy 版本开发，适配LinkerBot灵巧手，提供标准化手势原语控制，基于触觉与力矩的实时反馈实现自适应抓取。
 
-适配硬件：
-
-- **O20 灵巧手**：预定义29种手势原语，包含9种无接触手势原语、7种力控有接触手势原语、13种视觉力控有接触手势原语
-- **L25 & O6 等其他型号灵巧手**：coming soon
 
 项目详细文档:
 [手势原语发布文档](https://alidocs.dingtalk.com/i/nodes/R4GpnMqJzGzNeyYDCkm0qyox8Ke0xjE3)
@@ -111,6 +108,8 @@ ros2 topic pub --once /hand_gesture_cmd std_msgs/String "data: 'thumb_adduction_
 
 
 ## 3\.1 规则说明
+- **支持型号**：与 `config/o20.yaml`、`config/o6.yaml` 中 `primitives.supported` allowlist 一致（**已实机验证**）；L25 等配置预留型号尚未验证，不在下表列出。
+
 - **无接触手势原语**： 仅输入「话题字符串指令 \+ 当前关节状态」，无需视觉、TCP位姿。任意时刻可执行，不经过抓取门控。
 
 - **力控有接触手势原语**：预成型 → 手指力控闭合 → 拇指力控闭合 → 自适应保持；持握 \>800mA 自动卸力；过载保护：单关节 \>1000mA 持续 \>2s 自动归位。任意时刻可执行，不经过抓取门控。
@@ -119,44 +118,44 @@ ros2 topic pub --once /hand_gesture_cmd std_msgs/String "data: 'thumb_adduction_
 
 ## 3\.2 无接触手势原语
 
-|序号|指令名称|功能说明|输入信息|
-|---|---|---|---|
-|1|open|五指完全张开，复位基础姿态|话题字符串指令、当前关节状态|
-|2|init|手部复位至安全初始化中立位置|话题字符串指令、当前关节状态|
-|3|fist|五指完全握拳固定姿态|话题字符串指令、当前关节状态|
-|4|pinch|拇指\+食指标准精细对捏|话题字符串指令、当前关节状态|
-|5|point|食指单独伸直指向，其余手指弯曲收拢|话题字符串指令、当前关节状态|
-|6|ok\_sign|OK手势：拇指食指对接成环，剩余三指伸直|话题字符串指令、当前关节状态|
-|7|v\_sign|V字手势：食指、中指伸直，无名指小指弯曲|话题字符串指令、当前关节状态|
-|8|relax\_grip|缓慢卸力，放松当前握持姿态|话题字符串指令、当前关节状态|
-|9|release|完全释放抓取物体，五指舒展打开|话题字符串指令、当前关节状态|
+|序号|指令名称|功能说明|支持型号|输入信息|
+|---|---|---|---|---|
+|1|open|五指完全张开，复位基础姿态|O20, O6|话题字符串指令、当前关节状态|
+|2|init|手部复位至安全初始化中立位置|O20, O6|话题字符串指令、当前关节状态|
+|3|fist|五指完全握拳固定姿态|O20, O6|话题字符串指令、当前关节状态|
+|4|pinch|拇指\+食指标准精细对捏|O20, O6|话题字符串指令、当前关节状态|
+|5|point|食指单独伸直指向，其余手指弯曲收拢|O20, O6|话题字符串指令、当前关节状态|
+|6|ok\_sign|OK手势：拇指食指对接成环，剩余三指伸直|O20, O6|话题字符串指令、当前关节状态|
+|7|v\_sign|V字手势：食指、中指伸直，无名指小指弯曲|O20, O6|话题字符串指令、当前关节状态|
+|8|relax\_grip|缓慢卸力，放松当前握持姿态|O20, O6|话题字符串指令、当前关节状态|
+|9|release|完全释放抓取物体，五指舒展打开|O20, O6|话题字符串指令、当前关节状态|
 
 ## 3\.3 力控有接触手势原语
 
-|序号|指令名称|功能说明|输入信息|
-|---|---|---|---|
-|1|thumb\_adduction\_grip|拇指侧向夹持，支持 prep预就位 / close 闭合两阶段执行|话题字符串指令、当前关节状态|
-|2|index\_middle\_adduction\_grip|食指\+中指侧向对夹夹持，夹取香烟、笔杆、细棒等细长物体|话题字符串指令、当前关节状态|
-|3|ring|食中指环形包络，拇指与食指\+中指同时力控闭合自适应抓取|话题字符串指令、当前关节状态|
-|4|middle\_ring|中指环形包络，拇指与中指上下错开力控闭合自适应抓取|话题字符串指令、当前关节状态|
-|5|tripod|三指捏取，拇指与食指\+中指指尖对捏形成三角支撑|话题字符串指令、当前关节状态|
-|6|index\_pinch|食指捏取，拇指与食指指尖精确对捏，拾取螺丝/针/薄片等小物体|话题字符串指令、当前关节状态|
-|7|middle\_pinch|中指捏取，拇指与中指指尖对捏，食指保持自由避让|话题字符串指令、当前关节状态|
+|序号|指令名称|功能说明|支持型号|输入信息|
+|---|---|---|---|---|
+|1|thumb\_adduction\_grip|拇指侧向夹持，支持 prep预就位 / close 闭合两阶段执行|O20, O6|话题字符串指令、当前关节状态|
+|2|index\_middle\_adduction\_grip|食指\+中指侧向对夹夹持，夹取香烟、笔杆、细棒等细长物体|O20|话题字符串指令、当前关节状态|
+|3|ring|食中指环形包络，拇指与食指\+中指同时力控闭合自适应抓取|O20, O6|话题字符串指令、当前关节状态|
+|4|middle\_ring|中指环形包络，拇指与中指上下错开力控闭合自适应抓取|O20, O6|话题字符串指令、当前关节状态|
+|5|tripod|三指捏取，拇指与食指\+中指指尖对捏形成三角支撑|O20, O6|话题字符串指令、当前关节状态|
+|6|index\_pinch|食指捏取，拇指与食指指尖精确对捏，拾取螺丝/针/薄片等小物体|O20, O6|话题字符串指令、当前关节状态|
+|7|middle\_pinch|中指捏取，拇指与中指指尖对捏，食指保持自由避让|O20, O6|话题字符串指令、当前关节状态|
 
 ## 3\.4 视觉力控有接触手势原语
 
-|序号|指令名称|功能说明|输入信息|
-|---|---|---|---|
-|1|index\_ring\_by\_vision|感知自适应精细环握，适配小型薄物体，auto映射precision模式|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
-|2|large\_wrap\_by\_vision|全包络强力抓取，适配大尺寸多面体，auto映射power模式|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
-|3|middle\_ring\_by\_vision|拇指\+中指单指对夹，高精度薄物体精细抓取|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
-|4|ring\_by\_vision|拇指\+食指\+中指环形包络，适配中等圆柱/扁平件|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
-|5|small\_warp\_by\_vision|拇指配合全部四指小型全包络，小物体高力量抓取|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
-|6|no\_index\_warp\_by\_vision|无食指参与包络，仅拇指\+中/无名/小指，保留食指自由作业|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
-|7|hook\_by\_vision|四指钩握、无拇指参与，适配把手、挂钩、环形物件|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
-|8|index\_pinch\_by\_vision|拇指食指超精细窄幅对捏，微小物体拾取|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
-|9|middle\_pinch\_by\_vision|拇指中指单独精细对捏，避开食指干涉|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
-|10|tripod\_by\_vision|三脚架三指夹持（拇指\+食指\+中指），三点稳定支撑抓取|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
-|11|palmar\_by\_vision|掌面全包络大面积贴合，适配大尺寸平整物体|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
-|12|parallel\_extension\_by\_vision|手指平行伸展对夹，适配薄板、片状工件|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
-|13|disk\_by\_vision|圆盘环形环绕抓取，适配圆形盘状、环状物体|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
+|序号|指令名称|功能说明|支持型号|输入信息|
+|---|---|---|---|---|
+|1|index\_ring\_by\_vision|感知自适应精细环握，适配小型薄物体，auto映射precision模式|O20|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
+|2|large\_wrap\_by\_vision|全包络强力抓取，适配大尺寸多面体，auto映射power模式|O20|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
+|3|middle\_ring\_by\_vision|拇指\+中指单指对夹，高精度薄物体精细抓取|O20|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
+|4|ring\_by\_vision|拇指\+食指\+中指环形包络，适配中等圆柱/扁平件|O20|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
+|5|small\_warp\_by\_vision|拇指配合全部四指小型全包络，小物体高力量抓取|O20|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
+|6|no\_index\_warp\_by\_vision|无食指参与包络，仅拇指\+中/无名/小指，保留食指自由作业|O20|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
+|7|hook\_by\_vision|四指钩握、无拇指参与，适配把手、挂钩、环形物件|O20|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
+|8|index\_pinch\_by\_vision|拇指食指超精细窄幅对捏，微小物体拾取|O20|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
+|9|middle\_pinch\_by\_vision|拇指中指单独精细对捏，避开食指干涉|O20|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
+|10|tripod\_by\_vision|三脚架三指夹持（拇指\+食指\+中指），三点稳定支撑抓取|O20|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
+|11|palmar\_by\_vision|掌面全包络大面积贴合，适配大尺寸平整物体|O20|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
+|12|parallel\_extension\_by\_vision|手指平行伸展对夹，适配薄板、片状工件|O20|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|
+|13|disk\_by\_vision|圆盘环形环绕抓取，适配圆形盘状、环状物体|O20|话题字符串指令、当前关节状态、TCP位姿、3D bounding box|

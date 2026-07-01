@@ -113,3 +113,52 @@ fk:
     17: middle_pip
     18: ring_pip
     19: pinky_pip
+
+capabilities:
+  finger_abd: true
+  thumb_abd: true
+  thumb_rot: true
+  finger_tips: true
+  thumb_tip: true
+  finger_root2: true
+  vision_fk: true
+  touch: true
+  current: true
+
+primitives:
+  mode: allowlist
+  supported:
+    - init
+    - open
+    - release
+    - relax_grip
+    - fist
+    - pinch
+    - point
+    - ok_sign
+    - v_sign
+    - thumb_adduction_grip
+    - index_middle_adduction_grip
+    - tripod
+    - ring
+    - middle_ring
+    - index_pinch
+    - middle_pinch
+    - parallel_extension
+    - index_ring_by_vision
+    - large_wrap_by_vision
+    - middle_ring_by_vision
+    - ring_by_vision
+    - small_warp_by_vision
+    - no_index_warp_by_vision
+    - hook_by_vision
+    - index_pinch_by_vision
+    - middle_pinch_by_vision
+    - tripod_by_vision
+    - palmar_by_vision
+    - parallel_extension_by_vision
+    - disk_by_vision
+  grasp_type_map:
+    precision: index_ring_by_vision
+    lateral: index_middle_adduction_grip
+    power: large_wrap_by_vision

@@ -112,3 +112,182 @@ fk:
         pinky_distal_Link:   [0.006, 0.0, 0.030]
       o20_to_urdf_joint:
         15: thumb_dip
+
+# ---------------------------------------------------------------------------
+# 手型能力 & 原语白名单
+# ---------------------------------------------------------------------------
+capabilities:
+  finger_abd: true
+  thumb_abd: true
+  thumb_rot: true
+  finger_tips: true
+  thumb_tip: true
+  finger_root2: false
+  vision_fk: true
+  touch: true
+  current: true
+
+primitives:
+  mode: allowlist
+  supported:
+    - init
+    - open
+    - release
+    - relax_grip
+    - fist
+    - pinch
+    - point
+    - ok_sign
+    - v_sign
+    - thumb_adduction_grip
+    - index_middle_adduction_grip
+    - tripod
+    - ring
+    - middle_ring
+    - index_pinch
+    - middle_pinch
+    - parallel_extension
+    - index_ring_by_vision
+    - large_wrap_by_vision
+    - middle_ring_by_vision
+    - ring_by_vision
+    - small_warp_by_vision
+    - no_index_warp_by_vision
+    - hook_by_vision
+    - index_pinch_by_vision
+    - middle_pinch_by_vision
+    - tripod_by_vision
+    - palmar_by_vision
+    - parallel_extension_by_vision
+    - disk_by_vision
+  grasp_type_map:
+    precision: index_ring_by_vision
+    lateral: index_middle_adduction_grip
+    power: large_wrap_by_vision
+
+# ---------------------------------------------------------------------------
+# 手势参数（O20 semantic 稀疏 joint 名）
+# ---------------------------------------------------------------------------
+gestures:
+  thumb_adduction_grip:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 255
+        thumb_abd: 130
+        thumb_rot: 170
+        thumb_tip: 135
+        index_base: 160
+        middle_base: 160
+        ring_base: 160
+        pinky_base: 160
+        index_tip: 140
+        middle_tip: 140
+        ring_tip: 140
+        pinky_tip: 140
+    motion:
+      phase1: 0.35
+      phase2: 0.40
+      phase3: 0.35
+      phase4: 0.65
+    joints:
+      hold: [0, 5, 10, 15]
+      flex: [0, 15]
+      rot: 10
+    progressive:
+      abd: 5
+      flex: 15
+      abd_max: 185
+      flex_max: 150
+      rate: 20.0
+    contact:
+      fingers: [0, 1]
+
+  open:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 0
+        index_base: 0
+        middle_base: 0
+        ring_base: 0
+        pinky_base: 0
+        thumb_abd: 0
+        index_abd: 128
+        middle_abd: 128
+        ring_abd: 128
+        pinky_abd: 128
+        thumb_rot: 0
+        thumb_tip: 0
+        index_tip: 0
+        middle_tip: 0
+        ring_tip: 0
+        pinky_tip: 0
+    motion:
+      type: static
+      duration: 0.6
+
+  init:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 80
+        index_base: 80
+        middle_base: 80
+        ring_base: 80
+        pinky_base: 80
+        thumb_abd: 60
+        index_abd: 128
+        middle_abd: 128
+        ring_abd: 128
+        pinky_abd: 128
+        thumb_rot: 50
+        thumb_tip: 60
+        index_tip: 60
+        middle_tip: 60
+        ring_tip: 60
+        pinky_tip: 60
+    motion:
+      type: static
+      duration: 0.8
+
+  fist:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 60
+        index_base: 255
+        middle_base: 255
+        ring_base: 255
+        pinky_base: 255
+        thumb_abd: 200
+        index_abd: 128
+        middle_abd: 128
+        ring_abd: 128
+        pinky_abd: 128
+        thumb_rot: 230
+        thumb_tip: 255
+        index_tip: 255
+        middle_tip: 255
+        ring_tip: 255
+        pinky_tip: 255
+    motion:
+      type: phased_pose
+      phase1: 0.5
+      phase2: 0.4
+      phase3: 0.4
+      phase4: 0.4
+    joints:
+      hold: [0, 5, 10, 15]
+
+  release:
+    motion:
+      type: static
+      duration: 0.6
+
+  relax_grip:
+    motion:
+      type: relax_grip
+      duration: 0.6
+      hold_duration: 0.3
+      grip_duration: 0.4
