@@ -21,6 +21,11 @@ from ..primitive_base import (
     HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
     lerp_angles, ABD_NEUTRAL, HAND_CONFIGS, HandConfig,
 )
+from ..gesture_engine import (
+    PhasedLerpEngine, SequentialForceCloseEngine,
+    make_small_warp_by_vision_engine, make_small_warp_by_vision_sfce_engine,
+)
+from ..gesture_params import load_small_warp_by_vision_params
 
 _logger = logging.getLogger(__name__)
 
@@ -108,6 +113,9 @@ class SmallWarpByVision(HandGesturePrimitive):
     """
 
     def __init__(self):
+        self._engine: Optional[PhasedLerpEngine] = None
+        self._sfce_engine: Optional[SequentialForceCloseEngine] = None
+        self._engine_hand_type: str = ""
         self._phase = _Phase.PRESHAPE
         self._close_angles: List[float] = []
         self._baseline_currents: List[float] = []
@@ -121,8 +129,34 @@ class SmallWarpByVision(HandGesturePrimitive):
     def name(self) -> str:
         return "small_warp_by_vision"
 
+    @property
+    def grasp_state(self) -> str:
+        if self._engine is not None:
+            return self._engine.grasp_state
+        return "approaching"
+
+    def _ensure_engine(self, ctx: PrimitiveContext) -> PhasedLerpEngine:
+        if self._engine is None or self._engine_hand_type != ctx.hand_type:
+            self._engine = make_small_warp_by_vision_engine(ctx.hand_type)
+            if self._engine is None:
+                raise RuntimeError(f"small_warp_by_vision config engine missing for {ctx.hand_type}")
+            self._engine.reset(self._start_angles)
+            self._engine_hand_type = ctx.hand_type
+        return self._engine
+
+    def _ensure_sfce_engine(self, ctx: PrimitiveContext) -> Optional[SequentialForceCloseEngine]:
+        if self._sfce_engine is None or self._engine_hand_type != ctx.hand_type:
+            self._sfce_engine = make_small_warp_by_vision_sfce_engine(ctx.hand_type)
+            if self._sfce_engine is not None:
+                self._sfce_engine.reset(self._start_angles)
+                self._engine_hand_type = ctx.hand_type
+        return self._sfce_engine
+
     def on_enter(self, current_angles: List[float]) -> None:
         super().on_enter(current_angles)
+        self._engine = None
+        self._sfce_engine = None
+        self._engine_hand_type = ""
         self._phase = _Phase.PRESHAPE
         self._baseline_currents = [0.0] * len(current_angles)
         self._settle_count = 0
@@ -200,6 +234,16 @@ class SmallWarpByVision(HandGesturePrimitive):
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
+        if load_small_warp_by_vision_params(ctx.hand_type) is not None:
+            engine = self._ensure_engine(ctx)
+            raw = engine.compute(current_angles, elapsed, ctx)
+            return self._move(raw)
+
+        sfce = self._ensure_sfce_engine(ctx)
+        if sfce is not None:
+            raw = sfce.compute(elapsed, ctx)
+            return self._move(raw)
+
         cfg = self._get_cfg(ctx)
         finger_joints = _build_finger_joints(cfg)
 

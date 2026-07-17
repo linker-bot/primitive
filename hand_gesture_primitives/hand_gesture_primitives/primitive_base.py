@@ -120,15 +120,15 @@ HAND_CONFIGS: Dict[str, HandConfig] = {
     ),
     "l25": HandConfig(
         num_joints=25,
-        thumb_base=0,     thumb_abd=5,     thumb_rot=10,   thumb_tip=20,
-        thumb_root2=15,
-        index_base=1,     index_tip=21,    index_abd=6,
-        middle_base=2,    middle_tip=22,   middle_root2=17,
-        ring_base=3,      ring_tip=23,
-        pinky_base=4,     pinky_tip=24,
+        thumb_base=0,     thumb_abd=5,     thumb_rot=10,   thumb_tip=15,
+        thumb_root2=-1,
+        index_base=1,     index_tip=16,    index_abd=6,
+        middle_base=2,    middle_tip=17,   middle_root2=-1,
+        ring_base=3,      ring_tip=18,
+        pinky_base=4,     pinky_tip=19,
         abd_neutral=128,
-        abd_indices=[5, 6, 7, 8, 9],
-        reserved_indices=[],
+        abd_indices=[6, 7, 8, 9],
+        reserved_indices=[11, 12, 13, 14],
         invert_angles=True,
     ),
     "o6": HandConfig(
@@ -142,7 +142,6 @@ HAND_CONFIGS: Dict[str, HandConfig] = {
         abd_neutral=128,
         abd_indices=[],
         reserved_indices=[],
-        invert_angles=False,
     ),
 }
 
@@ -174,6 +173,8 @@ class PrimitiveContext:
     object_label: str = ""
     joint_currents: List[float] = field(default_factory=lambda: [0.0] * 20)
     hand_type: str = "o20"
+    # 手型超参覆盖 (来自 YAML primitive_params，原语读取目标角度等)
+    primitive_params: dict = field(default_factory=dict)
     # 感知输出: 目标物体几何信息
     object_size: Optional[np.ndarray] = None          # [sx, sy, sz] meters
     object_orientation: Optional[np.ndarray] = None   # quaternion [x, y, z, w]

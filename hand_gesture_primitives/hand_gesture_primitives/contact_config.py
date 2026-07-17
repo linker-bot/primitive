@@ -21,8 +21,8 @@ class ContactThresholds:
     current_settle_frames: int = 10
     hold_safe_current: float = 800.0
     # O6 hand.torque：0~100 无量纲%（100≈1657.5mA）
-    torque_delta_pct: float = 15.0
-    hold_safe_torque_pct: float = 55.0
+    torque_delta_pct: float = 30.0
+    hold_safe_torque_pct: float = 80.0
     pinch_torque_stop_pct: float = 15.0
     # 静态 pinch 堵转：绝对力矩超过此值才停（空载 lerp 不误触）
     pinch_stall_torque_pct: float = 50.0

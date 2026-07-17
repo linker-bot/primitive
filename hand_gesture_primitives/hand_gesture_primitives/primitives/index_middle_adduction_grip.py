@@ -1,8 +1,10 @@
 """食中指侧向夹持原语 — 食指与中指并拢侧面夹持物体。
 
+engine 字段控制行为:
+  - 不填 / 不存在 YAML gestures 配置: 旧硬编码 4 阶段逻辑 (O20 行为)
+  - "finger_adduction": FingerAdductionEngine (L25 新行为, YAML 驱动)
+
 典型场景：夹持香烟、笔杆、细棒等细长物体 (食中指像筷子一样夹住)。
-无名/小指握拢 → P2 拇指 abd→rot→base/tip → 食中指侧摆张开 → 并拢夹取。
-触觉闭环：渐进夹紧直到接触检测 → 冻结防过力。
 """
 
 from typing import List, Optional, Tuple
@@ -10,10 +12,19 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 from ..contact_detection import FingerContactTracker
+from ..gesture_engine import FingerAdductionEngine
+from ..gesture_params import (
+    FingerAdductionParams,
+    load_finger_adduction_params,
+)
 from ..primitive_base import (
     HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
     lerp_angles, ABD_NEUTRAL, parse_grasp_phase,
 )
+
+# ============================================================================
+# 旧引擎常量 (O20 硬编码, engine 未填时使用)
+# ============================================================================
 
 # 准备姿态: 无名/小指握拢，拇指让位到尺侧
 RING_PINKY_CLOSE = 255
@@ -69,6 +80,10 @@ PROGRESSIVE_CLOSE_RATE = 15.0
 PROGRESSIVE_CLOSE_MAX = 200.0
 
 
+# ============================================================================
+# 旧引擎辅助函数
+# ============================================================================
+
 def _close_abd_from_diameter(d_mm: float) -> Tuple[int, int]:
     """根据物体直径计算并拢时的食中指 abd 目标。"""
     abd_offset = int(np.clip(40 - (d_mm - 3) * 2.5, 10, 40))
@@ -107,20 +122,30 @@ def _adaptive_index_middle_adduction_angles(object_size):
     return angles
 
 
+# ============================================================================
+# 新引擎辅助
+# ============================================================================
+
+def _params(ctx: PrimitiveContext) -> FingerAdductionParams:
+    return load_finger_adduction_params(ctx.hand_type)
+
+
+# ============================================================================
+# 原语类
+# ============================================================================
+
 class IndexMiddleAdductionGrip(HandGesturePrimitive):
-    """食指与中指侧向并拢夹持。
+    """食中指侧向夹持。
 
-    四阶段:
-      P1: 无名/小指握拢 + 食中指弯曲 (拇指保持起始位)
-      P2: 拇指准备 — abd 内扣 → rot 旋转 → base/tip 闭合
-      P3: 食中指侧摆张开 (prep)
-      P4: 食中指侧摆并拢夹取
-    触觉闭环: P4 完成后 progressive 继续并拢 → 接触冻结。
+    engine="finger_adduction" (L25 新): FingerAdductionEngine
+        P1: 所有关节 lerp → YAML target
+        P2: index_abd + middle_abd 渐进并拢，接触冻结
 
-    phase 模式:
-      prep  — 执行 P1~P3 后 hold，grasp_state=ready
-      close — 从当前姿态执行 P4 + 触觉 progressive
-      full  — 一次跑完全流程 (默认，向后兼容)
+    engine 未填 (O20 旧): 硬编码 4 阶段
+        P1: 无名/小指握拢 + 食中指弯曲
+        P2: 拇指准备 — abd 内扣 → rot 旋转 → base/tip 闭合
+        P3: 食中指侧摆张开 (prep)
+        P4: 食中指侧摆并拢夹取 + progressive 接触冻结
     """
 
     def __init__(self, phase: str = "full") -> None:
@@ -130,19 +155,49 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
     def phase(self) -> str:
         return self._phase
 
-    def on_enter(self, current_angles: List[float]) -> None:
-        super().on_enter(current_angles)
-        self._target: List[float] = list(INDEX_MIDDLE_ADDUCTION_ANGLES)
-        self._spread_abd: Tuple[int, int] = (INDEX_ABD_SPREAD, MIDDLE_ABD_SPREAD)
-        self._last_size: Optional[np.ndarray] = None
-        self._blend_from: Optional[List[float]] = None
-        self._blend_start_elapsed: float = 0.0
-        self._frozen_pose: Optional[List[float]] = None
-        self._progressive_angles: Optional[List[float]] = None
-        self._last_elapsed: float = 0.0
-        self._size_locked: bool = False
-        self._contact = FingerContactTracker()
-        self.grasp_state: str = "approaching"
+    @property
+    def grasp_state(self) -> str:
+        if self._use_new_engine:
+            if self._engine is not None:
+                return self._engine.grasp_state
+            return "approaching"
+        return self._grasp_state
+
+    @grasp_state.setter
+    def grasp_state(self, value: str) -> None:
+        if self._use_new_engine:
+            if self._engine is not None:
+                self._engine.grasp_state = value
+        else:
+            self._grasp_state = value
+
+    # ------------------------------------------------------------------
+    # 新引擎 (FingerAdductionEngine)
+    # ------------------------------------------------------------------
+
+    def _ensure_engine(self, ctx: PrimitiveContext) -> FingerAdductionEngine:
+        if self._engine is None or self._engine_hand_type != ctx.hand_type:
+            p = _params(ctx)
+            self._engine = FingerAdductionEngine(
+                pose_target=list(p.prep_angles),
+                joint_a=p.joint_a,
+                joint_b=p.joint_b,
+                close_a=p.close_a,
+                close_b=p.close_b,
+                pose_duration=p.phase1,
+                close_duration=p.close_duration,
+                phase=self._phase,
+                contact_fingers=list(p.contact_fingers) if p.contact_fingers else None,
+                thumb_joints=list(p.thumb_joints) if p.thumb_joints else None,
+                thumb_duration=p.thumb_duration,
+            )
+            self._engine.reset(self._start_angles)
+            self._engine_hand_type = ctx.hand_type
+        return self._engine
+
+    # ------------------------------------------------------------------
+    # 旧引擎 (硬编码 4 阶段)
+    # ------------------------------------------------------------------
 
     def _update_spread_abd(self, object_size: Optional[np.ndarray]) -> None:
         if object_size is None:
@@ -241,9 +296,51 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
     def _check_contact(self, ctx: PrimitiveContext) -> bool:
         return self._contact.check(ctx, (1, 2))
 
+    # ------------------------------------------------------------------
+    # on_enter / compute
+    # ------------------------------------------------------------------
+
+    def on_enter(self, current_angles: List[float]) -> None:
+        super().on_enter(current_angles)
+        # 引擎选择延迟到首次 compute (此时才有 ctx.hand_type)
+        self._engine_selected: bool = False
+
+    def _select_engine(self, ctx: PrimitiveContext) -> None:
+        """首次 compute 时根据 ctx.hand_type 决定用哪个引擎。"""
+        p = _params(ctx)
+        self._use_new_engine = (p.engine == "finger_adduction")
+
+        if self._use_new_engine:
+            self._engine: Optional[FingerAdductionEngine] = None
+            self._engine_hand_type: str = ""
+        else:
+            # 旧引擎初始化
+            self._target: List[float] = list(INDEX_MIDDLE_ADDUCTION_ANGLES)
+            self._spread_abd: Tuple[int, int] = (INDEX_ABD_SPREAD, MIDDLE_ABD_SPREAD)
+            self._last_size: Optional[np.ndarray] = None
+            self._blend_from: Optional[List[float]] = None
+            self._blend_start_elapsed: float = 0.0
+            self._frozen_pose: Optional[List[float]] = None
+            self._progressive_angles: Optional[List[float]] = None
+            self._last_elapsed: float = 0.0
+            self._size_locked: bool = False
+            self._contact = FingerContactTracker()
+            self._grasp_state: str = "approaching"
+
+        self._engine_selected = True
+
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
+        if not self._engine_selected:
+            self._select_engine(ctx)
+
+        if self._use_new_engine:
+            engine = self._ensure_engine(ctx)
+            raw = engine.compute(current_angles, elapsed, ctx)
+            return self._move(raw)
+
+        # --- 旧引擎逻辑 ---
         self._update_spread_abd(ctx.object_size)
 
         if self._phase == "close":

@@ -24,16 +24,14 @@ def raw_torque_to_pct(value: float) -> float:
 def normalize_motor_torque_values(
     values: Sequence[float], num_joints: int,
 ) -> Optional[List[float]]:
-    """统一为 O6 官方 0~100% 量纲；若存在 >100 的采样则按 legacy raw 0~255 换算。"""
+    """O6 raw 0~255 → 0~100%。"""
     if not values or len(values) < num_joints:
         return None
     try:
         sliced = [float(v) for v in values[:num_joints]]
     except (TypeError, ValueError):
         return None
-    if any(v > 100.0 for v in sliced if v >= 0):
-        return [raw_torque_to_pct(v) if v >= 0 else v for v in sliced]
-    return sliced
+    return [raw_torque_to_pct(v) if v >= 0 else v for v in sliced]
 
 
 def parse_hand_info_torque(data: dict, num_joints: int) -> Optional[List[float]]:

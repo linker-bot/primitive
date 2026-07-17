@@ -79,6 +79,9 @@ class GestureExecutor:
         if hand_type not in HAND_CONFIGS:
             raise ValueError(f"未知 hand_type: {hand_type}")
         self._hand_config = HAND_CONFIGS[hand_type]
+        # 清除 @lru_cache，确保每次节点重启都重新加载 YAML（避免旧配置残留）
+        from .gesture_params import clear_gesture_params_cache
+        clear_gesture_params_cache()
         self._primitive_space_dim = (
             20 if hand_type == "o6" else self._hand_config.num_joints
         )
@@ -275,8 +278,8 @@ class GestureExecutor:
             f"hand_cmd: /cb_{hand_side}_hand_control_cmd"
         )
 
-        # 启动时自动执行 init 原语
-        self.set_primitive(InitHand())
+        # 等收到第一帧手部状态后再执行 init (避免 start_angles 为零位)
+        self._startup_init_pending = True
 
     @property
     def active_primitive_name(self) -> str:
@@ -405,7 +408,7 @@ class GestureExecutor:
 
     def _state_callback(self, msg: JointState) -> None:
         n = len(msg.position)
-        if self._hand_type == "o6" and self._profile is not None:
+        if self._hand_type in ("o6", "l25") and self._profile is not None:
             if n == self._profile.hardware.num_joints:
                 self._current_angles = self._profile.hardware.from_hardware(
                     list(msg.position))
@@ -416,13 +419,17 @@ class GestureExecutor:
             self._hand_state_received = True
 
     def _semantic_to_hardware(self, semantic: List[float]) -> List[float]:
-        """原语关节空间 → 驱动发布向量。"""
+        """原语关节空间 → 驱动发布向量。
+
+        O20: identity（20-DOF 直接发布）。
+        O6 / L25: 经 YAML 配置 from_o20 逐关节映射（方向/耦合/校准）。
+        """
         o20 = list(semantic[:20])
         while len(o20) < 20:
             o20.append(0.0)
         for i in RESERVED_INDICES:
             o20[i] = 0.0
-        if self._hand_type == "o6" and self._profile is not None:
+        if self._hand_type in ("o6", "l25") and self._profile is not None:
             hw = self._profile.hardware.to_hardware(o20)
             return [max(0.0, min(255.0, v)) for v in hw]
         n = self._hand_config.num_joints
@@ -513,9 +520,15 @@ class GestureExecutor:
 
         if currents is not None:
             # SDK 未收到 CAN 0x36 前为 -1；仅更新有效采样，保留上帧值
-            for i, c in enumerate(currents):
-                if c >= 0:
-                    self._joint_currents[i] = c
+            if self._hand_type == "l25" and self._profile is not None:
+                # L25 硬件电流 → O20 semantic 重映射
+                for hw_idx, spec in self._profile.hardware._reverse_map.items():
+                    if hw_idx < len(currents) and currents[hw_idx] >= 0:
+                        self._joint_currents[spec["from"]] = currents[hw_idx]
+            else:
+                for i, c in enumerate(currents):
+                    if c >= 0:
+                        self._joint_currents[i] = c
 
         if torques is not None:
             if self._joint_torque is None:
@@ -690,6 +703,10 @@ class GestureExecutor:
         self._joint_torque = np.array(normalized, dtype=np.float64)
 
     def _tick(self) -> None:
+        if self._startup_init_pending and self._hand_state_received:
+            self._startup_init_pending = False
+            self.set_primitive(InitHand())
+
         # FK 指尖位置计算
         fingertip_positions = None
         if self._fk_solver is not None:
@@ -735,6 +752,28 @@ class GestureExecutor:
                 if result.feasible:
                     self._last_target = self._semantic_to_hardware(result.target_angles)
                     self._log_motion_started(self._active_primitive.name, self._last_target)
+                    # --- TIP MONITOR: 监控指尖关节在运动中的变化 ---
+                    if self._active_primitive.name == "thumb_adduction_grip":
+                        if not hasattr(self, '_tip_monitor_count'):
+                            self._tip_monitor_count = 0
+                            self._tip_monitor_start = result.target_angles[:]
+                        self._tip_monitor_count += 1
+                        if self._tip_monitor_count % 20 == 1:
+                            sem = result.target_angles
+                            hw = self._last_target
+                            if len(hw) >= 25:
+                                self._node.get_logger().info(
+                                    f"[TIP-MON #{self._tip_monitor_count}] t={elapsed:.1f}s  "
+                                    f"sem tips[15-19]={[sem[i] for i in (15,16,17,18,19)]}  "
+                                    f"hw  tips[15-19]={[hw[i] for i in (15,16,17,18,19)]}  "
+                                    f"hw  tips[20-24]={[hw[i] for i in (20,21,22,23,24)]}  "
+                                    f"sem rot[10]={sem[10]:.0f}  hw rot[10]={hw[10]:.0f}"
+                                )
+                            else:
+                                self._node.get_logger().info(
+                                    f"[TIP-MON #{self._tip_monitor_count}] t={elapsed:.1f}s  "
+                                    f"hw=[{', '.join(f'{v:.0f}' for v in hw)}]"
+                                )
                 else:
                     self._log_infeasible_hold(
                         self._active_primitive.name, result, ctx)
@@ -743,7 +782,9 @@ class GestureExecutor:
                 self._log_grasp_state(ctx)
 
         # 始终发送（有原语发计算结果，无原语/infeasible 发上次的目标值）
-        self._publish_cmd(self._last_target)
+        # 启动未完成时不发 (避免 _last_target 零位导致手异常闭拢)
+        if not self._startup_init_pending:
+            self._publish_cmd(self._last_target)
 
         # 发布指尖位置
         if self._publish_fingertips and fingertip_positions is not None:
@@ -834,7 +875,12 @@ class GestureExecutor:
         msg = JointState()
         msg.header = Header()
         msg.header.stamp = self._node.get_clock().now().to_msg()
-        msg.name = list(JOINT_NAMES) if self._hand_type == "o20" else [f"j{i}" for i in range(self._hand_config.num_joints)]
+        if self._hand_type == "o20":
+            msg.name = list(JOINT_NAMES)
+        elif self._profile is not None:
+            msg.name = list(self._profile.hardware.joint_names)
+        else:
+            msg.name = [f"j{i}" for i in range(self._hand_config.num_joints)]
         msg.position = [float(a) for a in angles]
         # 勿填 effort/velocity：linker_hand_sdk 会把 effort 当作 set_torque，
         # 全 0 会覆盖 teach 力矩导致手无法运动。

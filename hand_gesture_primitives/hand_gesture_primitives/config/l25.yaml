@@ -1,14 +1,54 @@
-# LinkerHand L25 关节配置
-# 25-DOF, 弯曲/拇指方向与 O20 相反, 指尖与指中耦合
+# ==============================================================================
+# LinkerHand L25 手型配置
+# ==============================================================================
 #
-# L25 布局:
-#   [0-4]   指根弯曲 (255=张开, 0=弯曲)
-#   [5]     拇指侧摆 (255=外展, 0=内收)
-#   [6-9]   四指侧摆 (方向同 O20)
-#   [10]    拇指旋转 (255=自然位, 0=最大旋转)
-#   [11-14] 保留位 (默认 255)
-#   [15-19] 指中弯曲 (255=伸直, 0=弯曲)
-#   [20-24] 指尖弯曲 (随指中耦合)
+# L25 是 25-DOF 手型，其弯曲方向和拇指结构与 O20 相反：
+#   - O20:  0=伸直, 255=完全弯曲  (基础弯曲 + 拇指)
+#   - L25:  255=伸直, 0=完全弯曲   (基础弯曲 + 拇指)
+#   - 四指侧摆 (abd): 方向与 O20 一致，128=中立位
+#
+# 架构约定：
+#   原语层 (gesture_engine / primitives) 始终在 O20 20-DOF 语义空间计算。
+#   executor._semantic_to_hardware() 负责 O20→L25 的逐关节转换：
+#     invert  → 方向反转 (255 - val)
+#     also    → 指尖耦合 (指中带动指尖)
+#     calibration → 微调偏移
+#   executor._state_callback 负责 L25→O20 的逆转换 (from_hardware)。
+#
+# ==============================================================================
+# L25 硬件关节布局 (25-DOF)
+# ==============================================================================
+#
+#  索引  关节名          方向约定               说明
+#  ─────────────────────────────────────────────────────────────────
+#  [0]   thumb_base      255=伸直, 0=弯曲      拇指根部弯曲
+#  [1]   index_base      255=伸直, 0=弯曲      食指根部弯曲
+#  [2]   middle_base     255=伸直, 0=弯曲      中指根部弯曲
+#  [3]   ring_base       255=伸直, 0=弯曲      无名指根部弯曲
+#  [4]   pinky_base      255=伸直, 0=弯曲      小指根部弯曲
+#  [5]   thumb_abd       255=外展, 0=内收      拇指侧摆 (内收=靠近手掌)
+#  [6]   index_abd       128=中立, <128=桡侧    食指侧摆 (与 O20 同向)
+#  [7]   middle_abd      128=中立, <128=桡侧    中指侧摆 (与 O20 同向)
+#  [8]   ring_abd        128=中立, <128=桡侧    无名指侧摆 (与 O20 同向)
+#  [9]   pinky_abd       128=中立, <128=桡侧    小指侧摆 (与 O20 同向)
+#  [10]  thumb_rot       255=自然位, 0=最大旋转 拇指旋转 (对捏时减小)
+#  [11]  rsv_11          保留位 (恒=255)        无对应电机
+#  [12]  rsv_12          保留位 (恒=255)        无对应电机
+#  [13]  rsv_13          保留位 (恒=255)        无对应电机
+#  [14]  rsv_14          保留位 (恒=255)        无对应电机
+#  [15]  thumb_mid       255=伸直, 0=弯曲      拇指指中弯曲
+#  [16]  index_mid       255=伸直, 0=弯曲      食指指中弯曲
+#  [17]  middle_mid      255=伸直, 0=弯曲      中指指中弯曲
+#  [18]  ring_mid        255=伸直, 0=弯曲      无名指指中弯曲
+#  [19]  pinky_mid       255=伸直, 0=弯曲      小指指中弯曲
+#  [20]  thumb_tip       255=伸直, 0=弯曲      拇指指尖 (随 thumb_mid 耦合)
+#  [21]  index_tip       255=伸直, 0=弯曲      食指指尖 (随 index_mid 耦合)
+#  [22]  middle_tip      255=伸直, 0=弯曲      中指指尖 (随 middle_mid 耦合)
+#  [23]  ring_tip        255=伸直, 0=弯曲      无名指指尖 (随 ring_mid 耦合)
+#  [24]  pinky_tip       255=伸直, 0=弯曲      小指指尖 (随 pinky_mid 耦合)
+#
+# 注意: [20-24] 指尖关节由 from_o20 的 also 字段自动耦合到对应指中，
+#       无需在原语中显式处理。
 
 hand_joint: L25
 num_joints: 25
@@ -40,44 +80,71 @@ joint_names:
   - ring_tip
   - pinky_tip
 
-# O20 内部索引 → L25 硬件索引映射
-# invert: true 表示 hw_val = 255 - o20_val
-# also: 额外复制到的硬件索引 (耦合关节)
+# ==============================================================================
+# O20 语义 → L25 硬件 逐关节映射 (from_o20)
+# ==============================================================================
+#
+# 每条映射定义:
+#   to:     目标硬件索引 (L25 的 joint_names 位置)
+#   invert: true  → hw = 255 - o20  (方向反转: O20 0→255 映射为 L25 255→0)
+#           false → hw = o20         (保持原值, 仅用于四指侧摆)
+#   also:   额外复制到的硬件索引列表 (指尖耦合: 指中同时驱动指尖)
+#
+# 为什么只有 15 个 O20 索引? 因为 O20 只有 20-DOF (0-19),
+# 其中 [11-14] 是保留位恒为 0，不参与硬件映射。
+# L25 多出的 [20-24] 指尖由 also 耦合覆盖，无需独立 O20 通道。
+#
 from_o20:
-  0:  {to: 0,  invert: true}
-  1:  {to: 1,  invert: true}
-  2:  {to: 2,  invert: true}
-  3:  {to: 3,  invert: true}
-  4:  {to: 4,  invert: true}
-  5:  {to: 5,  invert: true}
-  6:  {to: 6,  invert: false}
-  7:  {to: 7,  invert: false}
-  8:  {to: 8,  invert: false}
-  9:  {to: 9,  invert: false}
-  10: {to: 10, invert: true}
-  15: {to: 15, invert: true, also: [20]}
-  16: {to: 16, invert: true, also: [21]}
-  17: {to: 17, invert: true, also: [22]}
-  18: {to: 18, invert: true, also: [23]}
-  19: {to: 19, invert: true, also: [24]}
+  0:  {to: 0,  invert: true}         # thumb_base    → L25[0]
+  1:  {to: 1,  invert: true}         # index_base    → L25[1]
+  2:  {to: 2,  invert: true}         # middle_base   → L25[2]
+  3:  {to: 3,  invert: true}         # ring_base     → L25[3]
+  4:  {to: 4,  invert: true}         # pinky_base    → L25[4]
+  5:  {to: 5,  invert: true}         # thumb_abd     → L25[5]  (内收=减小)
+  6:  {to: 6,  invert: false}        # index_abd     → L25[6]  (方向同O20)
+  7:  {to: 7,  invert: false}        # middle_abd    → L25[7]  (方向同O20)
+  8:  {to: 8,  invert: false}        # ring_abd      → L25[8]  (方向同O20)
+  9:  {to: 9,  invert: false}        # pinky_abd     → L25[9]  (方向同O20)
+  10: {to: 10, invert: true}         # thumb_rot     → L25[10] (旋转=减小)
+  15: {to: 15, invert: true, also: [20]}  # thumb_tip → L25[15] + 耦合 L25[20]
+  16: {to: 16, invert: true, also: [21]}  # index_tip → L25[16] + 耦合 L25[21]
+  17: {to: 17, invert: true, also: [22]}  # middle_tip→ L25[17] + 耦合 L25[22]
+  18: {to: 18, invert: true, also: [23]}  # ring_tip  → L25[18] + 耦合 L25[23]
+  19: {to: 19, invert: true, also: [24]}  # pinky_tip → L25[19] + 耦合 L25[24]
 
+# ==============================================================================
+# 保留位 (reserved)
+# ==============================================================================
+# O20 语义中 [11-14] 恒为 0。to_hardware() 输出时这些位置填 default 值。
+# 注意: L25 default=255 (而非 O20 的 0)，因为 L25 的 255=伸直/自然位。
 reserved:
   indices: [11, 12, 13, 14]
   default: 255
 
-# 校准偏移 (硬件单位, 在方向转换后施加)
-# 用于补偿 L25 与 O20 不同机械结构导致的姿态偏差
-# 键为硬件索引, 值为偏移量 (正=增大, 负=减小), 结果 clamp 到 [0, 255]
+# ==============================================================================
+# 校准偏移 (calibration)
+# ==============================================================================
+# 在 invert 方向转换之后、clamp 之前施加。
+# 键 = 硬件索引，值 = 偏移量 (正=增大, 负=减小)。默认全注释，按需启用。
+# 示例:
+#   5: -10   → thumb_abd 内收更多 (让拇指更贴近食指)
+#   10: +15  → thumb_rot 更接近自然位
 calibration:
   # 拇指校准 (调整后拇食指对头)
   # 5: -10    # thumb_abd: 负值=更内收
   # 10: +15   # thumb_rot: 正值=更接近自然位
 
-# 正运动学配置 (FK)
-# o20_to_urdf_joint: O20 通道索引 → URDF 关节名 (仅映射 actuated joints)
-# fingertip_links: URDF 中各指尖 link 名 (顺序: thumb, index, middle, ring, pinky)
-# base_link: FK 计算的参考坐标系 (URDF 根 link)
-# urdf_model: URDF 目录/文件中的型号标识
+# ==============================================================================
+# 正运动学 (FK) — yourdfpy 前向运动学计算指尖位置
+# ==============================================================================
+# o20_to_urdf_joint: O20 20-DOF 索引 → URDF 关节名
+#   - 只映射有驱动电机的关节 (15 个)
+#   - [11-14] 保留位无对应 URDF 关节, 不在此映射中
+# fingertip_links: 5 个指尖 link (thumb→pinky)
+# tip_offsets: 指肚接触面偏移 ({link: [x, y, z]})
+#   - x: 掌侧方向 (正=向前)
+#   - y: 侧向
+#   - z: 沿骨方向 (正=指尖远侧)
 fk:
   urdf_model: l25
   base_link: hand_base_link
@@ -87,9 +154,7 @@ fk:
     - middle_distal
     - ring_distal
     - pinky_distal
-  # 指肚接触面偏移 (link 局部坐标系, 单位: 米)
-  # L25 distal link 长约 23mm (从 DIP 前方), 指肚在 ~65% 处 + 掌侧 10mm
-  # [x, y, z]: x=掌侧(正), y=侧向, z=沿骨方向(指尖)
+  # L25 distal link 长约 23mm (DIP 关节前方), 指肚在 ~65% 处 + 掌侧 10mm
   tip_offsets:
     thumb_distal:  [0.003, 0.0, 0.020]
     index_distal:  [0.010, 0.0, 0.015]
@@ -97,68 +162,512 @@ fk:
     ring_distal:   [0.010, 0.0, 0.015]
     pinky_distal:  [0.010, 0.0, 0.015]
   o20_to_urdf_joint:
-    0:  thumb_cmc_roll
-    1:  index_mcp_pitch
-    2:  middle_mcp_pitch
-    3:  ring_mcp_pitch
-    4:  pinky_mcp_pitch
-    5:  thumb_cmc_yaw
-    6:  index_mcp_roll
-    7:  middle_mcp_roll
-    8:  ring_mcp_roll
-    9:  pinky_mcp_roll
-    10: thumb_cmc_pitch
-    15: thumb_mcp
-    16: index_pip
-    17: middle_pip
-    18: ring_pip
-    19: pinky_pip
+    0:  thumb_cmc_roll      # thumb_base
+    1:  index_mcp_pitch     # index_base
+    2:  middle_mcp_pitch    # middle_base
+    3:  ring_mcp_pitch      # ring_base
+    4:  pinky_mcp_pitch     # pinky_base
+    5:  thumb_cmc_yaw       # thumb_abd
+    6:  index_mcp_roll      # index_abd
+    7:  middle_mcp_roll     # middle_abd
+    8:  ring_mcp_roll       # ring_abd
+    9:  pinky_mcp_roll      # pinky_abd
+    10: thumb_cmc_pitch     # thumb_rot
+    15: thumb_mcp           # thumb_tip (指中)
+    16: index_pip           # index_tip (指中)
+    17: middle_pip          # middle_tip (指中)
+    18: ring_pip            # ring_tip (指中)
+    19: pinky_pip           # pinky_tip (指中)
 
+# ==============================================================================
+# 能力声明 (capabilities)
+# ==============================================================================
+# 用于 HandProfile 的 allowlist 校验: 原语要求的能力必须全部在此声明。
+# finger_root2: L25 有指中关节 [15-19]，对应 O20 的 tip 索引。
 capabilities:
-  finger_abd: true
-  thumb_abd: true
-  thumb_rot: true
-  finger_tips: true
-  thumb_tip: true
-  finger_root2: true
-  vision_fk: true
-  touch: true
-  current: true
+  finger_abd: true          # 四指侧摆 (O20 idx 6-9)
+  thumb_abd: true           # 拇指侧摆 (O20 idx 5)
+  thumb_rot: true           # 拇指旋转 (O20 idx 10)
+  finger_tips: true         # 指尖独立控制
+  thumb_tip: true           # 拇指指尖控制
+  finger_root2: true        # 指中关节 (L25 特有, 由 also 耦合驱动)
+  vision_fk: true           # 正运动学 (FK 计算指尖位姿)
+  touch: true               # 触觉传感器
+  current: true             # 电流检测 (力反馈/接触检测)
 
+# ==============================================================================
+# 原语管理 (primitives)
+# ==============================================================================
+# mode: allowlist — 只允许 supported 列表中的原语执行
+# grasp_type_map: "auto" 命令根据物体 grasp_type 自动选择原语
 primitives:
   mode: allowlist
   supported:
-    - init
-    - open
-    - release
-    - relax_grip
-    - fist
-    - pinch
-    - point
-    - ok_sign
-    - v_sign
-    - thumb_adduction_grip
-    - index_middle_adduction_grip
-    - tripod
-    - ring
-    - middle_ring
-    - index_pinch
-    - middle_pinch
-    - parallel_extension
-    - index_ring_by_vision
-    - large_wrap_by_vision
-    - middle_ring_by_vision
-    - ring_by_vision
-    - small_warp_by_vision
-    - no_index_warp_by_vision
-    - hook_by_vision
-    - index_pinch_by_vision
-    - middle_pinch_by_vision
-    - tripod_by_vision
-    - palmar_by_vision
-    - parallel_extension_by_vision
-    - disk_by_vision
+    # --- 安全原语 (4) ---
+    - init                    # 初始化姿态
+    - open                    # 张开手
+    - release                 # 释放 (同 open)
+    - relax_grip              # 松弛握持
+    # --- 静态手势 (5) ---
+    - fist                    # 握拳
+    - pinch                   # 拇指-食指对捏
+    - point                   # 单指指向
+    - ok_sign                 # OK 手势
+    - v_sign                  # V 手势
+    # --- 力控接触原语 (6) ---
+    - thumb_adduction_grip    # 拇指侧向夹持 (engine: rot_progressive)
+    - index_middle_adduction_grip  # 食中指侧向夹持 (engine: finger_adduction)
+    - tripod                  # 三指捏取
+    - ring                    # 环形包络
+    - middle_ring             # 中指环形包络
+    - index_pinch             # 食指对捏
+    - middle_pinch            # 中指对捏
+    - parallel_extension      # 平行伸展
+    # --- 视觉力控原语 (7) — 需 GraspGate + 感知输入 ---
+    - index_ring_by_vision    # 食指包络 (视觉)
+    - large_wrap_by_vision    # 大力握持 (视觉)
+    - middle_ring_by_vision   # 中指包络 (视觉)
+    - ring_by_vision          # 环形包络 (视觉)
+    - small_warp_by_vision    # 小物体握持 (视觉)
+    - no_index_warp_by_vision # 无食指包络 (视觉)
+    - hook_by_vision          # 钩状抓取 (视觉)
+    # --- 视觉定位原语 (6) — 需 GraspGate + 感知输入 ---
+    - index_pinch_by_vision   # 食指对捏 (视觉)
+    - middle_pinch_by_vision  # 中指对捏 (视觉)
+    - tripod_by_vision        # 三指捏取 (视觉)
+    - palmar_by_vision        # 掌面接触 (视觉)
+    - parallel_extension_by_vision  # 平行伸展 (视觉)
+    - disk_by_vision          # 盘状物体抓取 (视觉)
+    - index_flick
+    - index_middle_flick
+    - twist2digit
+    - twist3digit
+    - twist5digit
   grasp_type_map:
-    precision: index_ring_by_vision
-    lateral: index_middle_adduction_grip
-    power: large_wrap_by_vision
+    precision: index_ring_by_vision    # 精确抓取 → 食指包络
+    lateral: index_middle_adduction_grip   # 侧向夹持 → 食中指并拢
+    power: large_wrap_by_vision    # 大力握持 → 全手掌包络
+
+
+# ==============================================================================
+# 手势参数 (gestures)
+# ==============================================================================
+# 只定义与 O20 默认值不同的手势。未定义的沿用 gesture_params.py 的 O20 默认值。
+# engine 字段:
+#   "" (不填)     → 使用旧引擎 (O20 行为)
+#   "rot_progressive" → thumb_adduction_grip 的新 RotProgressiveEngine
+#   "finger_adduction"→ index_middle_adduction_grip 的新 FingerAdductionEngine
+#   engine 只对 thumb_adduction_grip 和 index_middle_adduction_grip 有效，
+#   其他原语忽略此字段。
+# ==============================================================================
+gestures:
+  # --------------------------------------------------------------------------
+  # pinch — 拇指-食指对捏 (StaticPoseEngine)
+  # --------------------------------------------------------------------------
+  pinch:
+    angles:
+      space: semantic_o20       # 用 O20 语义关节名 (非硬件索引)
+      target:
+        index_abd: 255
+        thumb_base: 100           # 拇指根部（0=伸直, 255=弯曲）
+        index_base: 120           # 食指根部
+        thumb_abd: 120          # 拇指侧摆
+        thumb_rot: 190          # 拇指旋转
+        thumb_tip: 150          # 拇指指尖
+        index_tip: 160          # 食指指尖
+        middle_base: 0          # 中指松开
+        ring_base: 0            # 无名指松开
+        pinky_base: 0           # 小指松开
+    motion:
+      type: static
+      duration: 0.5
+
+  # --------------------------------------------------------------------------
+  # ok_sign — OK 手势 (StaticPoseEngine)
+  # --------------------------------------------------------------------------
+  ok_sign:
+    angles:
+      space: semantic_o20       # 用 O20 语义关节名
+      target:
+        # 拇指与食指捏成圆圈, 其余三指伸直
+        thumb_base: 100         # 拇指根部伸直 (0=伸直)
+        index_base: 120         # 食指根部弯曲
+        middle_base: 100        # 中指根部微弯
+        ring_base: 70           # 无名指根部微弯
+        pinky_base: 40          # 小指根部微弯
+        thumb_abd: 120          # 拇指侧摆 (外展以形成圆环)
+        index_abd: 220          # 食指侧摆中立
+        middle_abd: 128         # 中指侧摆中立
+        ring_abd: 64           # 无名指侧摆中立
+        pinky_abd: 0          # 小指侧摆中立
+        thumb_rot: 200          # 拇指旋转
+        thumb_tip: 150          # 拇指指尖弯曲 (与食指对捏)
+        index_tip: 160          # 食指指尖弯曲
+        middle_tip: 100         # 中指指尖微弯
+        ring_tip: 70            # 无名指指尖微弯
+        pinky_tip: 40           # 小指指尖微弯
+    motion:
+      type: static
+      duration: 0.6
+
+
+  # --------------------------------------------------------------------------
+  # thumb_adduction_grip — 拇指侧向夹持
+  #   engine="rot_progressive" → RotProgressiveEngine (新引擎)
+  #   P1: 所有关节 lerp 到位 (phase1=0.35s)
+  #   P2: thumb_rot 从 20 渐进到 abd_max=120 (rate=20/s)
+  # --------------------------------------------------------------------------
+  thumb_adduction_grip:
+    engine: "rot_progressive"  # "" = 旧PhasedLerpEngine, "rot_progressive" = 新引擎
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 150          # 拇指根部就位 (O20 语义: 较大=弯曲)
+        thumb_abd: 130           # 拇指侧摆内扣 (接近手掌)
+        thumb_rot: 20            # ★ P1 终点: 拇指旋转到 20 (之后渐进到 120)
+        thumb_tip: 100           # 拇指指尖弯曲
+        index_base: 220          # 食指根部 (配合拇指形成侧向夹持面)
+        middle_base: 220         # 中指根部
+        ring_base: 220           # 无名指根部
+        pinky_base: 220          # 小指根部
+        index_tip: 120           # 食指指尖
+        middle_tip: 170          # 中指指尖
+        ring_tip: 170            # 无名指指尖
+        pinky_tip: 170           # 小指指尖
+    motion:
+      phase1: 0.35               # P1: 所有关节 lerp 到 target 的时长 (秒)
+      phase2: 0.0                # 新引擎不使用 P2/3/4 (由 progressive 控制)
+      phase3: 0.0
+      phase4: 0.0
+    joints:
+      hold: []                   # 新引擎无 hold 逻辑 (无需锁定的关节)
+      flex: []                   # 新引擎无 flex 阶段
+      rot: 10                    # ★ rot 关节索引 = thumb_rot (渐进关节)
+    progressive:
+      abd: -1                    # -1 = 不渐进 abd (新引擎只用 rot 渐进)
+      flex: -1                   # -1 = 不渐进 flex
+      abd_max: 120               # ★ rot 渐进终点 (O20 语义: 120=旋转接近对捏位)
+      flex_max: 255
+      rate: 20.0                 # rot 渐进速率 (O20 语义单位/秒)
+    contact:
+      fingers: [0, 1]            # 接触检测: 拇指[0]+食指[1]，触发即冻结 rot
+
+  # --------------------------------------------------------------------------
+  # index_middle_adduction_grip — 食中指侧向夹持
+  #   engine="finger_adduction" → FingerAdductionEngine (新引擎)
+  #   P0: 拇指先行 (0.3s, 关节 [0,5,10,15] 先到位)
+  #   P1: 其余关节到位 (0.5s, abd 在张开位: index_abd=255, middle_abd=0)
+  #   P2: 食中指侧摆渐进并拢 (2.0s, index_abd: 255→96, middle_abd: 0→160)
+  #        接触检测触发即冻结。
+  # --------------------------------------------------------------------------
+  index_middle_adduction_grip:
+    engine: "finger_adduction"   # "" = 旧硬编码4阶段, "finger_adduction" = 新引擎
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 178          # 拇指根部就位
+        thumb_abd: 255           # 拇指侧摆内扣
+        thumb_rot: 255           # 拇指旋转就位
+        thumb_tip: 255           # 拇指指尖就位
+        index_base: 120          # 食指根部弯曲 (形成夹持弧面)
+        middle_base: 120         # 中指根部弯曲 (对称)
+        ring_base: 255           # 无名指握拢 (避让)
+        pinky_base: 255          # 小指握拢 (避让)
+        index_abd: 255           # ★ P1 终点: 食指侧摆张开 (>128=尺侧外展, 远离中指)
+        middle_abd: 0            # ★ P1 终点: 中指侧摆张开 (<128=桡侧外展, 远离食指)
+        ring_abd: 128            # 无名指侧摆中立
+        pinky_abd: 128           # 小指侧摆中立
+        index_tip: 100           # 食指指尖弯曲
+        middle_tip: 100          # 中指指尖弯曲
+        ring_tip: 255            # 无名指指尖握拢
+        pinky_tip: 255           # 小指指尖握拢
+    thumb:                        # P0: 拇指先行阶段
+      joints: [0, 5, 10, 15]     # 先行关节: base/abd/rot/tip
+      duration: 0.3              # 先行时长 (秒)
+    motion:
+      phase1: 0.5                # P1: 其余关节到位时长 (秒)
+    adduction:                    # P2: 双关节渐进并拢
+      joint_a: 6                 # 渐进关节A: index_abd (O20 idx)
+      joint_b: 7                 # 渐进关节B: middle_abd (O20 idx)
+      close_a: 96                # A 并拢终点 (<128=向尺侧并拢)
+      close_b: 160               # B 并拢终点 (>128=向桡侧并拢)
+      duration: 2.0              # 并拢时长 (秒)
+    contact:
+      fingers: [1, 2]            # 接触检测: 食指[1]+中指[2]，触发即冻结
+
+  # --------------------------------------------------------------------------
+  # tripod — 三指捏取 (PhasedPoseEngine)
+  # --------------------------------------------------------------------------
+  tripod:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 60        # 拇指根部弯曲
+        index_base: 160       # 食指根部弯曲
+        middle_base: 160      # 中指根部弯曲
+        ring_base: 0          # 无名指松开
+        pinky_base: 0         # 小指松开
+        thumb_abd: 200        # 拇指侧摆 (内收对捏)
+        index_abd: 255        # 食指侧摆 (>128 向拇指靠)
+        middle_abd: 0         # 中指侧摆 (与食指形成对向)
+        ring_abd: 105         # 无名指侧摆
+        pinky_abd: 52         # 小指侧摆
+        thumb_rot: 110        # 拇指旋转就位
+        thumb_tip: 90         # 拇指指尖弯曲
+        index_tip: 120        # 食指指尖
+        middle_tip: 110       # 中指指尖弯曲
+        ring_tip: 0           # 无名指指尖放松
+        pinky_tip: 0          # 小指指尖放松
+    motion:
+      type: phased_pose       # P1→P4 分阶段执行
+      phase1: 0.5             # P1: 非 hold 关节 → target (四指就位)
+      phase2: 0.4             # P2: thumb_abd[5] → target (侧摆到位)
+      phase3: 0.4             # P3: thumb_rot[10] → target (旋转到位)
+      phase4: 0.4             # P4: hold 关节放开 → 全部到位
+    joints:
+      hold: [0, 5, 10]        # P1 锁定拇指 base/abd/rot (tip 随四指一起到位)
+
+  # --------------------------------------------------------------------------
+  # index_pinch — 食指对捏 (StaticPoseEngine)
+  # --------------------------------------------------------------------------
+  index_pinch:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 0          # 拇指根部弯曲
+        index_base: 140        # 食指根部弯曲
+        middle_base: 0         # 中指松开
+        ring_base: 0           # 无名指松开
+        pinky_base: 0          # 小指松开
+        thumb_abd: 160         # 拇指侧摆内收
+        index_abd: 128         # 食指侧摆中立
+        middle_abd: 128        # 中指侧摆中立
+        ring_abd: 128          # 无名指侧摆中立
+        pinky_abd: 128         # 小指侧摆中立
+        thumb_rot: 100         # 拇指旋转就位
+        thumb_tip: 180         # 拇指指尖弯曲
+        index_tip: 140         # 食指指尖弯曲
+        middle_tip: 0          # 中指指尖放松
+        ring_tip: 0            # 无名指指尖放松
+        pinky_tip: 0           # 小指指尖放松
+    motion:
+      type: static            # 所有关节同时平滑 lerp
+      duration: 0.5           # 到位时长 (秒)
+
+  # --------------------------------------------------------------------------
+  # middle_pinch — 中指对捏 (StaticPoseEngine)
+  # --------------------------------------------------------------------------
+  middle_pinch:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 0         # 拇指根部弯曲
+        index_base: 0         # 食指松开
+        middle_base: 140      # 中指根部弯曲
+        ring_base: 0          # 无名指松开
+        pinky_base: 0         # 小指松开
+        thumb_abd: 190        # 拇指侧摆内收
+        index_abd: 200        # 食指侧摆 (远离中指, 避免干涉)
+        middle_abd: 128       # 中指侧摆中立
+        ring_abd: 128         # 无名指侧摆中立
+        pinky_abd: 128        # 小指侧摆中立
+        thumb_rot: 150        # 拇指旋转就位
+        thumb_tip: 180        # 拇指指尖弯曲
+        index_tip: 0          # 食指指尖放松
+        middle_tip: 130       # 中指指尖弯曲
+        ring_tip: 0           # 无名指指尖放松
+        pinky_tip: 0          # 小指指尖放松
+    motion:
+      type: static            # 所有关节同时平滑 lerp
+      duration: 0.5           # 到位时长 (秒)
+
+  # --------------------------------------------------------------------------
+  # disk_by_vision — 抓盘子 (StaticPoseEngine)
+  # --------------------------------------------------------------------------
+  disk_by_vision:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 200        # 拇指根部弯曲 (从 255 降下)
+        index_base: 140        # 食指根部 C 弧
+        middle_base: 140       # 中指根部 C 弧
+        ring_base: 140         # 无名指根部 C 弧
+        pinky_base: 140        # 小指根部 C 弧
+        thumb_abd: 200         # 拇指侧摆对齐中指 (从 255 降下)
+        index_abd: 128         # 食指侧摆中立
+        middle_abd: 128        # 中指侧摆中立
+        ring_abd: 128          # 无名指侧摆中立
+        pinky_abd: 128         # 小指侧摆中立
+        thumb_rot: 200         # 拇指旋转 (从 255 降下)
+        thumb_tip: 200         # 拇指指尖弯曲 (从 255 降下)
+        index_tip: 130         # 食指指尖 C 弧
+        middle_tip: 130        # 中指指尖 C 弧
+        ring_tip: 130          # 无名指指尖 C 弧
+        pinky_tip: 130         # 小指指尖 C 弧
+    motion:
+      type: static
+      duration: 1.4
+
+  # --------------------------------------------------------------------------
+  # index_pinch_by_vision — 食指对捏视觉版 (StaticPoseEngine)
+  # --------------------------------------------------------------------------
+  index_pinch_by_vision:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 0           # 拇指根部 (无视觉版对齐值)
+        index_base: 140        # 食指根部弯曲
+        thumb_abd: 160         # 拇指侧摆内收
+        thumb_rot: 100         # 拇指旋转就位
+        thumb_tip: 180         # 拇指指尖弯曲
+        index_tip: 140         # 食指指尖弯曲
+    motion:
+      type: static
+      duration: 0.5
+
+  # --------------------------------------------------------------------------
+  # middle_pinch_by_vision — 中指对捏视觉版 (StaticPoseEngine)
+  # --------------------------------------------------------------------------
+  middle_pinch_by_vision:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 0           # 拇指根部 (无视觉版对齐值)
+        middle_base: 140       # 中指根部弯曲
+        thumb_abd: 190         # 拇指侧摆内收
+        index_abd: 200         # 食指外展远离中指
+        thumb_rot: 150         # 拇指旋转就位
+        thumb_tip: 180         # 拇指指尖弯曲
+        middle_tip: 130        # 中指指尖弯曲
+    motion:
+      type: static
+      duration: 0.5
+
+  # --------------------------------------------------------------------------
+  # parallel_extension_by_vision — 平行伸展视觉版 (StaticPoseEngine)
+  # --------------------------------------------------------------------------
+  parallel_extension_by_vision:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 120        # 拇指根部
+        index_base: 235        # 食指根部
+        middle_base: 235       # 中指根部
+        ring_base: 235         # 无名指根部
+        pinky_base: 235        # 小指根部
+        thumb_abd: 235         # 拇指外展张开
+        index_abd: 193         # 食指内收并拢
+        middle_abd: 150        # 中指内收并拢
+        ring_abd: 105          # 无名指内收并拢
+        pinky_abd: 45          # 小指内收并拢
+        thumb_rot: 245         # 拇指旋转使指腹平行
+    motion:
+      type: static
+      duration: 0.6
+
+  # --------------------------------------------------------------------------
+  # parallel_extension — 平行伸展无视觉版 (StaticPoseEngine)
+  # --------------------------------------------------------------------------
+  parallel_extension:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 120
+        index_base: 235
+        middle_base: 235
+        ring_base: 235
+        pinky_base: 235
+        thumb_abd: 235
+        index_abd: 193
+        middle_abd: 150
+        ring_abd: 105
+        pinky_abd: 45
+        thumb_rot: 245
+    motion:
+      type: static
+      duration: 0.6
+
+  # --------------------------------------------------------------------------
+  # index_ring_by_vision — 食指环形包络视觉版 (StaticPoseEngine)
+  # --------------------------------------------------------------------------
+  index_ring_by_vision:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 200        # 拇指根部弯曲
+        index_base: 130        # 食指根部弯曲
+        thumb_abd: 190         # 拇指侧摆对准食指
+        thumb_rot: 120         # 拇指旋转对准食指
+        thumb_tip: 175         # 拇指指尖弯曲
+        index_tip: 110         # 食指指尖弯曲
+    motion:
+      type: static
+      duration: 0.9
+
+  # --------------------------------------------------------------------------
+  # large_wrap_by_vision — 大物体包络视觉版 (StaticPoseEngine)
+  # --------------------------------------------------------------------------
+  large_wrap_by_vision:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 200        # 拇指根部弯曲
+        index_base: 220        # 食指根部深度弯曲
+        middle_base: 220       # 中指根部深度弯曲
+        ring_base: 220         # 无名指根部深度弯曲
+        pinky_base: 220        # 小指根部深度弯曲
+        thumb_abd: 175         # 拇指外展对掌
+        thumb_rot: 210         # 拇指旋转对向四指
+        thumb_tip: 200         # 拇指指尖弯曲
+        index_tip: 210         # 食指指尖弯曲
+        middle_tip: 210        # 中指指尖弯曲
+        ring_tip: 210          # 无名指指尖弯曲
+        pinky_tip: 210         # 小指指尖弯曲
+    motion:
+      type: static
+      duration: 1.55
+
+  # --------------------------------------------------------------------------
+  # ring_by_vision — 环形包络视觉版 thumb_rot
+  # --------------------------------------------------------------------------
+  ring_by_vision:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_rot: 120         # 拇指旋转对准食指
+    motion:
+      type: static
+      duration: 0.5
+
+  # --------------------------------------------------------------------------
+  # middle_ring_by_vision — 中指环形包络视觉版 thumb_rot
+  # --------------------------------------------------------------------------
+  middle_ring_by_vision:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_rot: 120         # 拇指旋转对准食指
+    motion:
+      type: static
+      duration: 0.5
+
+  # --------------------------------------------------------------------------
+  # tripod_by_vision — 三指对捏视觉版 (预成型=tripod无视觉版)
+  # --------------------------------------------------------------------------
+  tripod_by_vision:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 60         # 拇指根部
+        index_base: 160        # 食指根部弯曲
+        middle_base: 160       # 中指根部弯曲
+        thumb_abd: 200         # 拇指侧摆内收
+        index_abd: 255         # 食指侧摆向拇指靠
+        middle_abd: 0          # 中指侧摆对向
+        thumb_rot: 110         # 拇指旋转就位
+        thumb_tip: 90          # 拇指指尖
+        index_tip: 120         # 食指指尖
+        middle_tip: 110        # 中指指尖
+    motion:
+      type: static
+      duration: 0.5

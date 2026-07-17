@@ -18,6 +18,7 @@ from .hand_profile import (
     load_hand_profile,
     list_configured_hand_joints,
 )
+from .hand_config import HAND_TYPE_ALIASES
 from .label_utils import normalize_label
 from .primitive_base import GRASP_PHASES, PHASED_GRASP_PRIMITIVES
 from .grasp_gate import GATED_PRIMITIVES
@@ -160,6 +161,12 @@ class GestureNode(Node):
                 f"hand_type 无效: '{self._hand_type}'，"
                 f"未找到 config/{{hand}}.yaml；可用: {available}")
             raise ValueError(str(exc)) from exc
+
+        requested = self._hand_type.strip().lower()
+        if requested in HAND_TYPE_ALIASES:
+            self.get_logger().info(
+                f"手型别名: {self._hand_type} → {HAND_TYPE_ALIASES[requested]} "
+                f"(按 L25 档案运行)")
 
         self._hand_type = self._profile.hand_type
 

@@ -15,6 +15,7 @@ from ..primitive_base import (
     HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
     lerp_angles, ABD_NEUTRAL,
 )
+from ..gesture_params import load_static_gesture_params
 
 REACH_THRESHOLD = 0.15
 PALM_FORWARD_MIN = 0.02
@@ -79,6 +80,48 @@ class DiskByVision(HandGesturePrimitive):
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
+        if ctx.hand_type == "o6":
+            params = load_static_gesture_params("o6", self.name)
+            target = list(params.target_angles)
+            # P1: 仅 thumb_abd[5] 侧摆定位
+            p1_target = list(self._start_angles)
+            p1_target[5] = target[5]
+            # P2: 四指 [1,2,3,4] 弯成C弧
+            p2_target = list(p1_target)
+            for i in (1, 2, 3, 4):
+                p2_target[i] = target[i]
+            t1 = PHASE1_DURATION
+            t2 = t1 + PHASE2_DURATION
+            t3 = t2 + PHASE3_DURATION
+            if elapsed < t1:
+                return self._move(lerp_angles(self._start_angles, p1_target, elapsed / t1))
+            elif elapsed < t2:
+                return self._move(lerp_angles(p1_target, p2_target, (elapsed - t1) / PHASE2_DURATION))
+            elif elapsed < t3:
+                return self._move(lerp_angles(p2_target, target, (elapsed - t2) / PHASE3_DURATION))
+            return self._move(target)
+
+        if ctx.hand_type == "l25":
+            params = load_static_gesture_params("l25", self.name)
+            target = list(params.target_angles)
+            p1_target = list(self._start_angles)
+            p1_target[5] = target[5]
+            p2_target = list(p1_target)
+            for i in (1, 2, 3, 4):
+                p2_target[i] = target[i]
+            for i in (16, 17, 18, 19):
+                p2_target[i] = target[i]
+            t1 = PHASE1_DURATION
+            t2 = t1 + PHASE2_DURATION
+            t3 = t2 + PHASE3_DURATION
+            if elapsed < t1:
+                return self._move(lerp_angles(self._start_angles, p1_target, elapsed / t1))
+            elif elapsed < t2:
+                return self._move(lerp_angles(p1_target, p2_target, (elapsed - t1) / PHASE2_DURATION))
+            elif elapsed < t3:
+                return self._move(lerp_angles(p2_target, target, (elapsed - t2) / PHASE3_DURATION))
+            return self._move(target)
+
         if ctx.tcp_pose is None:
             return self._hold("缺少 tcp_pose")
 

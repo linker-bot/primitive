@@ -11,7 +11,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
 from .fk_solver import HandFKSolver, create_fk_solver
-from .hand_config import HandConfig
+from .hand_config import HandConfig, resolve_hand_config_key
 
 
 class JointStateBridge(Node):
@@ -27,12 +27,13 @@ class JointStateBridge(Node):
         hand_side = self.get_parameter("hand_side").value
         hand_joint = self.get_parameter("hand_joint").value
         urdf_path = self.get_parameter("urdf_path").value or ""
+        canonical = resolve_hand_config_key(hand_joint)
 
-        self._config = HandConfig(hand_joint)
+        self._config = HandConfig(canonical)
         self._fk: HandFKSolver = None
         self._last_o20 = None
 
-        fk = create_fk_solver(hand_joint, hand_side, urdf_path, self.get_logger())
+        fk = create_fk_solver(canonical, hand_side, urdf_path, self.get_logger())
         if fk is None:
             self.get_logger().error("FK 求解器初始化失败，节点无法工作")
             raise RuntimeError("FK solver unavailable")
@@ -43,9 +44,13 @@ class JointStateBridge(Node):
         state_topic = f"/cb_{hand_side}_hand_state"
         self.create_subscription(JointState, state_topic, self._on_state, 10)
 
+        alias_note = (
+            f" (alias {hand_joint}→{canonical})"
+            if canonical != hand_joint.strip().lower() else ""
+        )
         self.get_logger().info(
             f"JointStateBridge 就绪: {state_topic} → /joint_states "
-            f"(model={hand_joint}, joints={len(fk._active_mapping)})"
+            f"(model={canonical}{alias_note}, joints={len(fk._active_mapping)})"
         )
 
     def _on_state(self, msg: JointState) -> None:

@@ -13,6 +13,8 @@ from ..primitive_base import (
     HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
     lerp_angles, ABD_NEUTRAL,
 )
+from ..gesture_engine import PhasedLerpEngine, make_index_ring_by_vision_engine
+from ..gesture_params import load_index_ring_by_vision_params, load_static_gesture_params
 
 # 默认目标角度 (无感知数据时的 fallback)
 INDEX_RING_ANGLES = [
@@ -52,7 +54,7 @@ PROGRESSIVE_CLOSE_RATE = 30.0       # 每秒增加的闭合量 (约3/tick @10Hz)
 PROGRESSIVE_CLOSE_MAX = 250.0       # 闭合安全上限
 
 
-def _adaptive_index_ring_by_vision_angles(object_size):
+def _adaptive_index_ring_by_vision_angles(object_size, base=None):
     """根据物体截面直径调整捏合闭合量。
 
     object_size: [sx, sy, sz] meters
@@ -61,15 +63,23 @@ def _adaptive_index_ring_by_vision_angles(object_size):
     物体越大 → 拇食指需要更大弯曲才能环绕包住。
     范围: d=5mm (小螺丝，轻捏) ~ d=30mm (粗柄，深握)
     """
-    angles = list(INDEX_RING_ANGLES)
+    angles = list(base if base is not None else INDEX_RING_ANGLES)
     s = sorted(object_size)
     d_mm = (s[0] + s[1]) / 2.0 * 1000.0  # 截面直径 mm
 
     # d=5mm → 轻捏(小弯曲); d=30mm → 深握(大弯曲)
-    angles[0] = int(np.clip(90 + (d_mm - 5) * 2.4, 90, 150))     # thumb_base
-    angles[1] = int(np.clip(100 + (d_mm - 5) * 2.8, 100, 170))   # index_base
-    angles[15] = int(np.clip(140 + (d_mm - 5) * 2.0, 140, 200))  # thumb_tip
-    angles[16] = int(np.clip(80 + (d_mm - 5) * 2.0, 80, 150))    # index_tip
+    # L25 base 传入时以 base 值为中心，允许 ±40 范围
+    if base is not None:
+        b0, b1, b15, b16 = base[0], base[1], base[15], base[16]
+        angles[0] = int(np.clip(b0 - 20 + (d_mm - 5) * 2.4, b0 - 20, b0 + 40))
+        angles[1] = int(np.clip(b1 - 30 + (d_mm - 5) * 2.8, b1 - 30, b1 + 40))
+        angles[15] = int(np.clip(b15 - 35 + (d_mm - 5) * 2.0, b15 - 35, b15 + 25))
+        angles[16] = int(np.clip(b16 - 30 + (d_mm - 5) * 2.0, b16 - 30, b16 + 40))
+    else:
+        angles[0] = int(np.clip(90 + (d_mm - 5) * 2.4, 90, 150))     # thumb_base
+        angles[1] = int(np.clip(100 + (d_mm - 5) * 2.8, 100, 170))   # index_base
+        angles[15] = int(np.clip(140 + (d_mm - 5) * 2.0, 140, 200))  # thumb_tip
+        angles[16] = int(np.clip(80 + (d_mm - 5) * 2.0, 80, 150))    # index_tip
     return angles
 
 
@@ -83,8 +93,16 @@ class IndexRingByVision(HandGesturePrimitive):
     触觉接触后冻结，滑移时缓慢恢复。
     """
 
+    def __init__(self):
+        self._engine: Optional[PhasedLerpEngine] = None
+        self._engine_hand_type: str = ""
+        self._grasp_state: str = "approaching"
+
     def on_enter(self, current_angles: List[float]) -> None:
         super().on_enter(current_angles)
+        self._engine = None
+        self._engine_hand_type = ""
+        self._grasp_state = "approaching"
         self._target: List[float] = list(INDEX_RING_ANGLES)
         self._last_size: Optional[np.ndarray] = None
         # 平滑过渡状态
@@ -97,8 +115,6 @@ class IndexRingByVision(HandGesturePrimitive):
         self._last_elapsed: float = 0.0
         self._size_locked: bool = False
         self._contact = FingerContactTracker()
-        # 状态追踪 (供 executor 日志使用)
-        self.grasp_state: str = "approaching"
 
     def _update_target(self, ctx: PrimitiveContext, elapsed: float,
                        current_output: List[float]) -> None:
@@ -111,7 +127,8 @@ class IndexRingByVision(HandGesturePrimitive):
             if np.linalg.norm(ctx.object_size - self._last_size) < SIZE_CHANGE_THRESHOLD:
                 return
         self._last_size = ctx.object_size.copy()
-        new_target = _adaptive_index_ring_by_vision_angles(ctx.object_size)
+        base = getattr(self, '_l25_base', None)
+        new_target = _adaptive_index_ring_by_vision_angles(ctx.object_size, base=base)
         # 启动 blend: 从当前输出位置平滑过渡到新目标
         self._blend_from = list(current_output)
         self._blend_start_elapsed = elapsed
@@ -140,7 +157,16 @@ class IndexRingByVision(HandGesturePrimitive):
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
-        raw = self._compute_raw(elapsed)
+        if load_index_ring_by_vision_params(ctx.hand_type) is not None:
+            engine = self._ensure_engine(ctx)
+            raw = engine.compute(current_angles, elapsed, ctx)
+            return self._move(raw)
+
+        if ctx.hand_type == "l25":
+            params = load_static_gesture_params("l25", self.name)
+            self._target = list(params.target_angles)
+            self._l25_base = list(params.target_angles)
+            raw = self._compute_raw(elapsed)
         self._update_target(ctx, elapsed, raw)
         raw = self._compute_raw(elapsed)
 
@@ -161,7 +187,7 @@ class IndexRingByVision(HandGesturePrimitive):
 
             # 已冻结 → 永远保持，等下一个指令
             if self._frozen_pose is not None:
-                self.grasp_state = "contact"
+                self._grasp_state = "contact"
                 return self._move(self._frozen_pose)
 
             has_contact = self._check_contact(ctx)
@@ -169,13 +195,13 @@ class IndexRingByVision(HandGesturePrimitive):
                 # 接触瞬间: 冻结实际输出姿态 (渐进模式下用渐进值，否则用 raw)
                 freeze = self._progressive_angles if self._progressive_angles is not None else raw
                 self._frozen_pose = list(freeze)
-                self.grasp_state = "contact"
+                self._grasp_state = "contact"
                 return self._move(self._frozen_pose)
 
             # 无接触 + phase2 已到达目标 → 渐进闭合
             phase2_done = elapsed >= (PHASE1_DURATION + PHASE2_DURATION)
             if phase2_done:
-                self.grasp_state = "progressive"
+                self._grasp_state = "progressive"
                 dt = elapsed - self._last_elapsed
                 self._last_elapsed = elapsed
                 if self._progressive_angles is None:
@@ -189,9 +215,24 @@ class IndexRingByVision(HandGesturePrimitive):
                     )
                 return self._move(list(self._progressive_angles))
 
-        self.grasp_state = "approaching"
+        self._grasp_state = "approaching"
         self._last_elapsed = elapsed
         return self._move(raw)
+
+    @property
+    def grasp_state(self) -> str:
+        if self._engine is not None:
+            return self._engine.grasp_state
+        return self._grasp_state
+
+    def _ensure_engine(self, ctx: PrimitiveContext) -> PhasedLerpEngine:
+        if self._engine is None or self._engine_hand_type != ctx.hand_type:
+            self._engine = make_index_ring_by_vision_engine(ctx.hand_type)
+            if self._engine is None:
+                raise RuntimeError(f"index_ring_by_vision config engine missing for {ctx.hand_type}")
+            self._engine.reset(self._start_angles)
+            self._engine_hand_type = ctx.hand_type
+        return self._engine
 
     @property
     def name(self) -> str:

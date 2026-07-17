@@ -205,13 +205,45 @@ def pinch_motion_should_stop(
 
     if not monitor_hw:
         return False, ""
-
     threshold = 200.0 if ctx.hand_type == "o20" else 400.0
     currents = ctx.joint_currents
     for hi in monitor_hw:
         if hi < len(currents) and float(currents[hi]) > threshold:
             return True, f"stall_current hw{hi}={currents[hi]:.0f}mA>{threshold:.0f}"
     return False, ""
+
+def pinch_motion_should_stop_toque(
+    ctx: PrimitiveContext,
+    monitor_hw: Sequence[int],
+    tactile_fingers: Sequence[int],
+    *,
+    lerp_progress: float = 1.0,
+    baseline: Optional[Sequence[float]] = None,
+) -> tuple[bool, str]:
+    """静态 timed pinch 停指。
+
+    O6：仅压感。/hand_motor_torque 空载收指常态 60~80%，绝对值/Δ 均会误触。
+    O20/L25：压感 + 关节电流绝对阈值 (mA)。
+    """
+    if ctx.tactile_mode != "none" and tactile_fingers:
+        if tactile_contact(ctx, tactile_fingers):
+            return True, "tactile"
+
+    if uses_torque_feedback(ctx.hand_type):
+        return False, ""
+
+    if not monitor_hw:
+        return False, ""
+    
+    threshold = 8.0 if ctx.hand_type == "o20" or ctx.hand_type == "l25" else 400.0
+    currents = ctx.joint_torque
+    k=-np.inf
+    for hi in monitor_hw:
+        k=max(k,float(currents[hi]))
+        
+        if hi < len(currents) and float(currents[hi]) > threshold:
+            return True, f"stall_current hw{hi}={currents[hi]:.0f}mA>{threshold:.0f}"
+    return False, f"{currents}"
 
 
 def pinch_motion_stop_detail(
