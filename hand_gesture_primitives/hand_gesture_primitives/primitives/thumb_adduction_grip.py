@@ -1,11 +1,18 @@
-"""大拇指侧向夹持原语 — 拇指侧面下压贴紧食指侧面形成侧捏。
+"""大拇指侧向夹持原语 — 姿态到位 + rot 关节渐进。
 
-运动由 gesture_engine.PhasedLerpEngine + config gestures 驱动。
+engine 字段控制行为:
+  - 不填 / "phased_lerp": PhasedLerpEngine (O20 旧行为, 4 阶段)
+  - "rot_progressive": RotProgressiveEngine (L25 新行为, P1 到位 + P2 rot 渐进)
 """
 
 from typing import List, Optional
 
-from ..gesture_engine import PhasedLerpEngine, adaptive_thumb_adduction_angles, make_phased_lerp_engine
+from ..gesture_engine import (
+    PhasedLerpEngine,
+    RotProgressiveEngine,
+    adaptive_thumb_adduction_angles,
+    make_phased_lerp_engine,
+)
 from ..gesture_params import (
     CANONICAL_SEMANTIC_HAND,
     ThumbAdductionParams,
@@ -74,12 +81,22 @@ def _adaptive_thumb_adduction_angles(object_size, ctx: PrimitiveContext):
 
 
 class ThumbAdductionGrip(HandGesturePrimitive):
-    """拇指侧向夹持 — PhasedLerpEngine facade。"""
+    """拇指侧向夹持。
+
+    engine="rot_progressive" (L25 新): RotProgressiveEngine
+        P1: 所有关节 lerp → YAML angles.target
+        P2: rot 渐进 → YAML progressive.abd_max
+
+    engine 未填 / "phased_lerp" (O20 旧): PhasedLerpEngine
+        4 阶段运动，接触检测 + progressive abd/flex。
+    """
 
     def __init__(self, phase: str = "full") -> None:
         self._phase = parse_grasp_phase(phase)
         self._engine: Optional[PhasedLerpEngine] = None
+        self._engine_new: Optional[RotProgressiveEngine] = None
         self._engine_hand_type: str = ""
+        self._use_new_engine: bool = False
 
     @property
     def phase(self) -> str:
@@ -87,25 +104,57 @@ class ThumbAdductionGrip(HandGesturePrimitive):
 
     @property
     def grasp_state(self) -> str:
+        if self._use_new_engine and self._engine_new is not None:
+            return self._engine_new.grasp_state
         if self._engine is not None:
             return self._engine.grasp_state
         return "approaching"
 
     @grasp_state.setter
     def grasp_state(self, value: str) -> None:
-        if self._engine is not None:
+        if self._use_new_engine and self._engine_new is not None:
+            self._engine_new.grasp_state = value
+        elif self._engine is not None:
             self._engine.grasp_state = value
 
-    def _ensure_engine(self, ctx: PrimitiveContext) -> PhasedLerpEngine:
-        if self._engine is None or self._engine_hand_type != ctx.hand_type:
-            self._engine = make_phased_lerp_engine(ctx.hand_type, self._phase)
-            self._engine.reset(self._start_angles)
-            self._engine_hand_type = ctx.hand_type
-        return self._engine
+    def _ensure_engine(self, ctx: PrimitiveContext):
+        if self._engine_hand_type != ctx.hand_type:
+            self._engine = None
+            self._engine_new = None
+            self._engine_hand_type = ""
+
+        p = _params(ctx)
+        self._use_new_engine = (p.engine == "rot_progressive")
+
+        if self._use_new_engine:
+            if self._engine_new is None:
+                rot_joint = p.thumb_rot_joint if p.thumb_rot_joint >= 0 else 10
+                rot_target = p.progressive_abd_max if p.progressive_abd_max > 0 else 200.0
+                rot_rate = p.progressive_rate if p.progressive_rate > 0 else 10.0
+                contact_fingers = list(p.contact_fingers) if p.contact_fingers else None
+                self._engine_new = RotProgressiveEngine(
+                    pose_target=list(p.prep_angles),
+                    rot_joint=rot_joint,
+                    rot_target=rot_target,
+                    rot_rate=rot_rate,
+                    pose_duration=p.phase1,
+                    phase=self._phase,
+                    contact_fingers=contact_fingers,
+                )
+                self._engine_new.reset(self._start_angles)
+                self._engine_hand_type = ctx.hand_type
+            return self._engine_new
+        else:
+            if self._engine is None:
+                self._engine = make_phased_lerp_engine(ctx.hand_type, self._phase)
+                self._engine.reset(self._start_angles)
+                self._engine_hand_type = ctx.hand_type
+            return self._engine
 
     def on_enter(self, current_angles: List[float]) -> None:
         super().on_enter(current_angles)
         self._engine = None
+        self._engine_new = None
         self._engine_hand_type = ""
 
     def compute(

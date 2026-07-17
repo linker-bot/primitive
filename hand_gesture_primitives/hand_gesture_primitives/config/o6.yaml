@@ -63,6 +63,20 @@ primitives:
     - thumb_adduction_grip
     - ring
     - middle_ring
+    # --- by_vision 视觉原语 ---
+    - ring_by_vision
+    - middle_ring_by_vision
+    - index_ring_by_vision
+    - index_pinch_by_vision
+    - middle_pinch_by_vision
+    - tripod_by_vision
+    - large_wrap_by_vision
+    - small_warp_by_vision
+    - no_index_warp_by_vision
+    - hook_by_vision
+    - palmar_by_vision
+    - parallel_extension_by_vision
+    - disk_by_vision
   unsupported: []
   grasp_type_map:
     precision: middle_ring
@@ -244,7 +258,7 @@ gestures:
       space: hardware
       target:
         thumb_cmc_pitch: 90
-        thumb_cmc_yaw: 25
+        thumb_cmc_yaw: 5             # 与 by_vision 版一致，更内收以对齐中指
         index_mcp_pitch: 255
         middle_mcp_pitch: 110
         ring_mcp_pitch: 255
@@ -252,6 +266,38 @@ gestures:
     motion:
       type: static
       duration: 0.5
+
+  middle_ring_by_vision:
+    angles:
+      space: hardware
+      prep:
+        thumb_cmc_pitch: 200
+        thumb_cmc_yaw: 25            # 对齐中指，参考 middle_pinch
+        index_mcp_pitch: 255
+        middle_mcp_pitch: 220
+        ring_mcp_pitch: 255
+        pinky_mcp_pitch: 255
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta_torque_pct: 70
+      finger_step: 8                # 对齐 O20 精细步进
+      thumb_step: 8
+      hold_safe_torque_pct: 90
+    steps:
+      - name: close_middle
+        groups:
+          - id: middle
+            joints: [middle_base]
+            monitor: [middle_mcp_pitch]
+      - name: close_thumb
+        step: 8
+        groups:
+          - id: thumb
+            joints: [thumb_base]
+            monitor: [thumb_cmc_pitch]
 
   tripod:
     angles:
@@ -345,7 +391,7 @@ gestures:
       space: hardware
       prep:
         thumb_cmc_pitch: 200
-        thumb_cmc_yaw: 160
+        thumb_cmc_yaw: 95
         index_mcp_pitch: 90
         middle_mcp_pitch: 90
         ring_mcp_pitch: 255
@@ -355,10 +401,10 @@ gestures:
       preshape_duration: 0.5
       settle_frames: 10
     contact:
-      contact_delta_torque_pct: 15
+      contact_delta_torque_pct: 70
       finger_step: 8
       thumb_step: 8
-      hold_safe_torque_pct: 55
+      hold_safe_torque_pct: 90
     steps:
       - name: close_fingers
         groups:
@@ -380,9 +426,9 @@ gestures:
       space: hardware
       prep:
         thumb_cmc_pitch: 200
-        thumb_cmc_yaw: 170
+        thumb_cmc_yaw: 25
         index_mcp_pitch: 255
-        middle_mcp_pitch: 100
+        middle_mcp_pitch: 220
         ring_mcp_pitch: 255
         pinky_mcp_pitch: 255
     motion:
@@ -390,10 +436,10 @@ gestures:
       preshape_duration: 0.5
       settle_frames: 10
     contact:
-      contact_delta_torque_pct: 15
+      contact_delta_torque_pct: 70
       finger_step: 8
       thumb_step: 8
-      hold_safe_torque_pct: 55
+      hold_safe_torque_pct: 90
     steps:
       - name: close_middle
         groups:
@@ -406,3 +452,349 @@ gestures:
           - id: thumb
             joints: [thumb_base]
             monitor: [thumb_cmc_pitch]
+
+  # -----------------------------------------------------------------------
+  # B 类 — SFCE 顺序力控 by_vision 原语 (与 O20 legacy 行为对齐)
+  # -----------------------------------------------------------------------
+
+  tripod_by_vision:
+    angles:
+      space: hardware
+      prep:
+        thumb_cmc_pitch: 170
+        thumb_cmc_yaw: 50    # → semantic 205，对齐无视觉版 tripod
+        index_mcp_pitch: 165
+        middle_mcp_pitch: 165
+        ring_mcp_pitch: 0
+        pinky_mcp_pitch: 0
+      close:
+        thumb_cmc_pitch: 75     # → semantic 180，对齐无视觉版 tripod 捏合位
+        index_mcp_pitch: 115    # → semantic 140
+        middle_mcp_pitch: 110   # → semantic 145
+    motion:
+      phase1: 0.5
+      phase2: 0.0
+      phase3: 0.0
+      phase4: 0.5
+      phase4_split: 0.5
+    joints:
+      hold: [5]
+      flex: [0, 1, 2]
+      close_thumb: [0]
+      rot: -1
+    progressive:
+      all_joints: [0, 1, 2]
+      all_maxs: [255, 255, 255]
+      rate: 25.0
+    contact:
+      fingers: [0, 1, 2]
+
+  hook_by_vision:
+    angles:
+      space: hardware
+      prep:
+        thumb_cmc_pitch: 255
+        thumb_cmc_yaw: 127
+        index_mcp_pitch: 95
+        middle_mcp_pitch: 95
+        ring_mcp_pitch: 95
+        pinky_mcp_pitch: 95
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta_torque_pct: 70
+      finger_step: 8
+      hold_safe_torque_pct: 90
+    steps:
+      - name: close_fingers
+        groups:
+          - id: index
+            joints: [index_base]
+            monitor: [index_mcp_pitch]
+          - id: middle
+            joints: [middle_base]
+            monitor: [middle_mcp_pitch]
+          - id: ring
+            joints: [ring_base]
+            monitor: [ring_mcp_pitch]
+          - id: pinky
+            joints: [pinky_base]
+            monitor: [pinky_mcp_pitch]
+
+  small_warp_by_vision:
+    angles:
+      space: hardware
+      prep:
+        thumb_cmc_pitch: 205        # O20 _THUMB_BASE=50sem → hw=255-50=205
+        thumb_cmc_yaw: 105          # O20 _THUMB_ABD=150sem → hw=255-150=105 ✓
+        index_mcp_pitch: 175        # O20 index_base=80sem → hw=255-80=175 ✓
+        middle_mcp_pitch: 175
+        ring_mcp_pitch: 175
+        pinky_mcp_pitch: 175
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta_torque_pct: 70
+      finger_step: 8
+      thumb_step: 8
+      hold_safe_torque_pct: 90
+    steps:
+      - name: close_fingers
+        groups:
+          - id: index
+            joints: [index_base]
+            monitor: [index_mcp_pitch]
+          - id: middle
+            joints: [middle_base]
+            monitor: [middle_mcp_pitch]
+          - id: ring
+            joints: [ring_base]
+            monitor: [ring_mcp_pitch]
+          - id: pinky
+            joints: [pinky_base]
+            monitor: [pinky_mcp_pitch]
+      - name: close_thumb
+        step: 8
+        groups:
+          - id: thumb
+            joints: [thumb_base]
+            monitor: [thumb_cmc_pitch]
+
+  no_index_warp_by_vision:
+    angles:
+      space: hardware
+      prep:
+        thumb_cmc_pitch: 215        # O20 _THUMB_BASE=40sem → hw=255-40=215
+        thumb_cmc_yaw: 85           # O20 _THUMB_ABD=170sem → hw=255-170=85 ✓
+        index_mcp_pitch: 255
+        middle_mcp_pitch: 165       # O20 middle_base=90sem → hw=255-90=165
+        ring_mcp_pitch: 165         # O20 ring_base=90sem → hw=255-90=165
+        pinky_mcp_pitch: 165        # O20 pinky_base=90sem → hw=255-90=165
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta_torque_pct: 70
+      finger_step: 8
+      thumb_step: 8
+      hold_safe_torque_pct: 90
+    steps:
+      - name: close_fingers
+        groups:
+          - id: middle
+            joints: [middle_base]
+            monitor: [middle_mcp_pitch]
+          - id: ring
+            joints: [ring_base]
+            monitor: [ring_mcp_pitch]
+          - id: pinky
+            joints: [pinky_base]
+            monitor: [pinky_mcp_pitch]
+      - name: close_thumb
+        step: 8
+        groups:
+          - id: thumb
+            joints: [thumb_base]
+            monitor: [thumb_cmc_pitch]
+
+  palmar_by_vision:
+    angles:
+      space: hardware
+      prep:
+        thumb_cmc_pitch: 185
+        thumb_cmc_yaw: 75
+        index_mcp_pitch: 185
+        middle_mcp_pitch: 185
+        ring_mcp_pitch: 185
+        pinky_mcp_pitch: 185
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta_torque_pct: 70
+      finger_step: 8
+      thumb_step: 8
+      hold_safe_torque_pct: 90
+    steps:
+      - name: close_fingers
+        groups:
+          - id: index
+            joints: [index_base]
+            monitor: [index_mcp_pitch]
+          - id: middle
+            joints: [middle_base]
+            monitor: [middle_mcp_pitch]
+          - id: ring
+            joints: [ring_base]
+            monitor: [ring_mcp_pitch]
+          - id: pinky
+            joints: [pinky_base]
+            monitor: [pinky_mcp_pitch]
+      - name: close_thumb
+        step: 8
+        groups:
+          - id: thumb
+            joints: [thumb_base]
+            monitor: [thumb_cmc_pitch]
+
+  # -----------------------------------------------------------------------
+  # C 类 — 自适应视觉 by_vision 原语 (PhasedLerp + adaptive_fn)
+  # -----------------------------------------------------------------------
+
+  index_ring_by_vision:
+    angles:
+      space: hardware
+      prep:
+        thumb_cmc_pitch: 190
+        thumb_cmc_yaw: 80            # 固定对齐食指，参考 index_pinch
+        index_mcp_pitch: 175
+        middle_mcp_pitch: 255
+        ring_mcp_pitch: 255
+        pinky_mcp_pitch: 255
+    motion:
+      phase1: 0.4
+      phase2: 0.0
+      phase3: 0.0
+      phase4: 0.5
+    joints:
+      hold: [5]
+      flex: [0, 1]
+      rot: -1
+    close:
+      from_adaptive: true
+    progressive:
+      all_joints: [0, 1]             # 仅拇指弯曲(0)和食指弯曲(1)渐进
+      all_maxs: [255, 255]
+      rate: 30.0
+    contact:
+      fingers: [0, 1]
+
+  large_wrap_by_vision:
+    angles:
+      space: hardware
+      prep:
+        thumb_cmc_pitch: 190
+        thumb_cmc_yaw: 80             # 对齐 O20 固定值 175semantic
+        index_mcp_pitch: 175
+        middle_mcp_pitch: 175
+        ring_mcp_pitch: 175
+        pinky_mcp_pitch: 175
+    motion:
+      phase1: 0.5
+      phase2: 0.0
+      phase3: 0.0
+      phase4: 0.5
+    joints:
+      hold: [5]
+      flex: [0, 1, 2, 3, 4]
+      rot: -1
+    close:
+      from_adaptive: true
+    progressive:
+      all_joints: [0, 1, 2, 3, 4]    # 五指 flex 渐进，和 O20 一致
+      all_maxs: [255, 255, 255, 255, 255]
+      rate: 25.0
+      rate: 25.0
+    contact:
+      fingers: [0, 1, 2, 3, 4]
+
+  ring_by_vision:
+    angles:
+      space: hardware
+      prep:
+        thumb_cmc_pitch: 200
+        thumb_cmc_yaw: 95             # O20 _THUMB_ABD=160 semantic → hw=255-160=95
+        index_mcp_pitch: 90
+        middle_mcp_pitch: 90
+        ring_mcp_pitch: 255
+        pinky_mcp_pitch: 255
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta_torque_pct: 70
+      finger_step: 8
+      thumb_step: 8
+      hold_safe_torque_pct: 90
+    steps:
+      - name: close_fingers
+        groups:
+          - id: index
+            joints: [index_base]
+            monitor: [index_mcp_pitch]
+          - id: middle
+            joints: [middle_base]
+            monitor: [middle_mcp_pitch]
+      - name: close_thumb
+        step: 8
+        groups:
+          - id: thumb
+            joints: [thumb_base]
+            monitor: [thumb_cmc_pitch]
+
+  # -----------------------------------------------------------------------
+  # D 类 — 定时插值 by_vision 原语 (static)
+  # -----------------------------------------------------------------------
+
+  disk_by_vision:
+    angles:
+      space: hardware
+      target:
+        thumb_cmc_pitch: 0
+        thumb_cmc_yaw: 0
+        index_mcp_pitch: 115
+        middle_mcp_pitch: 115
+        ring_mcp_pitch: 115
+        pinky_mcp_pitch: 115
+    motion:
+      type: static
+      duration: 1.4
+
+  index_pinch_by_vision:
+    angles:
+      space: hardware
+      target:
+        thumb_cmc_pitch: 90         # 对齐 index_pinch（拇指更弯才能碰到食指）
+        thumb_cmc_yaw: 80           # 对齐 index_pinch（拇指更内收）
+        index_mcp_pitch: 115
+        middle_mcp_pitch: 255
+        ring_mcp_pitch: 255
+        pinky_mcp_pitch: 255
+    motion:
+      type: static
+      duration: 0.5
+
+  middle_pinch_by_vision:
+    angles:
+      space: hardware
+      target:
+        thumb_cmc_pitch: 90         # 对齐 middle_pinch
+        thumb_cmc_yaw: 5            # 更内收，让拇指靠近中指
+        index_mcp_pitch: 255
+        middle_mcp_pitch: 115
+        ring_mcp_pitch: 255
+        pinky_mcp_pitch: 255
+    motion:
+      type: static
+      duration: 0.5
+
+  parallel_extension_by_vision:
+    angles:
+      space: hardware
+      target:
+        thumb_cmc_pitch: 135
+        thumb_cmc_yaw: 20
+        index_mcp_pitch: 20
+        middle_mcp_pitch: 20
+        ring_mcp_pitch: 20
+        pinky_mcp_pitch: 20
+    motion:
+      type: static
+      duration: 0.6

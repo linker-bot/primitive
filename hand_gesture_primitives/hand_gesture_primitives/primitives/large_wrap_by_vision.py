@@ -13,6 +13,8 @@ from ..primitive_base import (
     HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
     lerp_angles, ABD_NEUTRAL,
 )
+from ..gesture_engine import PhasedLerpEngine, make_large_wrap_by_vision_engine
+from ..gesture_params import load_large_wrap_by_vision_params, load_static_gesture_params
 
 # 默认目标角度 (无感知数据时的 fallback)
 LARGE_WRAP_ANGLES = [
@@ -54,13 +56,13 @@ PROGRESSIVE_CLOSE_RATE = 25.0       # 每秒增加的闭合量 (约2.5/tick @10H
 PROGRESSIVE_CLOSE_MAX = 250.0       # 闭合安全上限
 
 
-def _adaptive_large_wrap_by_vision_angles(object_size):
+def _adaptive_large_wrap_by_vision_angles(object_size, base=None):
     """根据物体最大截面直径调整包络弯曲量。
 
     object_size: [sx, sy, sz] meters
     返回适配后的 20-DOF 目标角度列表。
     """
-    angles = list(LARGE_WRAP_ANGLES)
+    angles = list(base if base is not None else LARGE_WRAP_ANGLES)
     # 取 XY 平面最大截面直径 (排除高度轴)
     s = sorted(object_size)
     D_mm = float(max(s[0], s[1])) * 1000.0
@@ -85,8 +87,16 @@ class LargeWrapByVision(HandGesturePrimitive):
     感知数据变化时平滑过渡到新目标，避免关节跳变。
     """
 
+    def __init__(self):
+        self._engine: Optional[PhasedLerpEngine] = None
+        self._engine_hand_type: str = ""
+        self._grasp_state: str = "approaching"
+
     def on_enter(self, current_angles: List[float]) -> None:
         super().on_enter(current_angles)
+        self._engine = None
+        self._engine_hand_type = ""
+        self._grasp_state = "approaching"
         self._target: List[float] = list(LARGE_WRAP_ANGLES)
         self._last_size: Optional[np.ndarray] = None
         # 平滑过渡状态
@@ -99,8 +109,6 @@ class LargeWrapByVision(HandGesturePrimitive):
         self._last_elapsed: float = 0.0
         self._size_locked: bool = False
         self._contact = FingerContactTracker()
-        # 状态追踪 (供 executor 日志使用)
-        self.grasp_state: str = "approaching"
 
     def _update_target(self, ctx: PrimitiveContext, elapsed: float,
                        current_output: List[float]) -> None:
@@ -113,7 +121,8 @@ class LargeWrapByVision(HandGesturePrimitive):
             if np.linalg.norm(ctx.object_size - self._last_size) < SIZE_CHANGE_THRESHOLD:
                 return
         self._last_size = ctx.object_size.copy()
-        new_target = _adaptive_large_wrap_by_vision_angles(ctx.object_size)
+        base = getattr(self, '_l25_base', None)
+        new_target = _adaptive_large_wrap_by_vision_angles(ctx.object_size, base=base)
         self._blend_from = list(current_output)
         self._blend_start_elapsed = elapsed
         self._target = new_target
@@ -159,7 +168,16 @@ class LargeWrapByVision(HandGesturePrimitive):
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
-        raw = self._compute_raw(elapsed)
+        if load_large_wrap_by_vision_params(ctx.hand_type) is not None:
+            engine = self._ensure_engine(ctx)
+            raw = engine.compute(current_angles, elapsed, ctx)
+            return self._move(raw)
+
+        if ctx.hand_type == "l25":
+            params = load_static_gesture_params("l25", self.name)
+            self._target = list(params.target_angles)
+            self._l25_base = list(params.target_angles)
+            raw = self._compute_raw(elapsed)
         self._update_target(ctx, elapsed, raw)
         raw = self._compute_raw(elapsed)
 
@@ -180,7 +198,7 @@ class LargeWrapByVision(HandGesturePrimitive):
 
             # 已冻结 → 永远保持，等下一个指令
             if self._frozen_pose is not None:
-                self.grasp_state = "contact"
+                self._grasp_state = "contact"
                 return self._move(self._frozen_pose)
 
             # phase1: 四指闭合 → 检测 index/middle/ring/pinky
@@ -195,14 +213,14 @@ class LargeWrapByVision(HandGesturePrimitive):
                 # 接触瞬间: 冻结实际输出姿态 (渐进模式下用渐进值，否则用 raw)
                 freeze = self._progressive_angles if self._progressive_angles is not None else raw
                 self._frozen_pose = list(freeze)
-                self.grasp_state = "contact"
+                self._grasp_state = "contact"
                 return self._move(self._frozen_pose)
 
             # 无接触 + 全部阶段完成 → 渐进闭合
             all_phases_done = elapsed >= (PHASE1_DURATION + PHASE2_DURATION
                                           + PHASE3_DURATION + PHASE4_DURATION)
             if all_phases_done:
-                self.grasp_state = "progressive"
+                self._grasp_state = "progressive"
                 dt = elapsed - self._last_elapsed
                 self._last_elapsed = elapsed
                 if self._progressive_angles is None:
@@ -221,9 +239,24 @@ class LargeWrapByVision(HandGesturePrimitive):
                     )
                 return self._move(list(self._progressive_angles))
 
-        self.grasp_state = "approaching"
+        self._grasp_state = "approaching"
         self._last_elapsed = elapsed
         return self._move(raw)
+
+    @property
+    def grasp_state(self) -> str:
+        if self._engine is not None:
+            return self._engine.grasp_state
+        return self._grasp_state
+
+    def _ensure_engine(self, ctx: PrimitiveContext) -> PhasedLerpEngine:
+        if self._engine is None or self._engine_hand_type != ctx.hand_type:
+            self._engine = make_large_wrap_by_vision_engine(ctx.hand_type)
+            if self._engine is None:
+                raise RuntimeError(f"large_wrap_by_vision config engine missing for {ctx.hand_type}")
+            self._engine.reset(self._start_angles)
+            self._engine_hand_type = ctx.hand_type
+        return self._engine
 
     @property
     def name(self) -> str:

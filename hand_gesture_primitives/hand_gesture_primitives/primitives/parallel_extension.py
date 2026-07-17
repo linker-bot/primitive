@@ -8,6 +8,7 @@
 
 from typing import List
 
+from ..gesture_params import load_static_gesture_params
 from ..primitive_base import HandGesturePrimitive, PrimitiveContext, PrimitiveResult, lerp_angles
 from .parallel_extension_by_vision import PARALLEL_EXT_ANGLES
 
@@ -24,6 +25,13 @@ class ParallelExtension(HandGesturePrimitive):
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
+        if ctx.hand_type == "l25":
+            params = load_static_gesture_params("l25", self.name)
+            t = elapsed / params.duration
+            if t >= 1.0:
+                return self._move(list(params.target_angles))
+            return self._move(lerp_angles(self._start_angles, params.target_angles, t))
+
         t = elapsed / self.TRANSITION_DURATION
         if t >= 1.0:
             return self._move(list(PARALLEL_EXT_ANGLES))

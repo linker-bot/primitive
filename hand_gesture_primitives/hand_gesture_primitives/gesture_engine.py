@@ -118,9 +118,10 @@ class PhasedLerpEngine:
             if np.linalg.norm(ctx.object_size - self._last_size) < SIZE_CHANGE_THRESHOLD:
                 return
         self._last_size = ctx.object_size.copy()
-        if self._params.close_move_joints:
+        fn = self._params.adaptive_fn
+        if fn is None:
             return
-        new_target = adaptive_thumb_adduction_angles(ctx.object_size, self._params)
+        new_target = fn(ctx.object_size, self._params)
         self._blend_from = list(current_output)
         self._blend_start_elapsed = elapsed
         self._target = new_target
@@ -128,7 +129,7 @@ class PhasedLerpEngine:
     def _compute_raw(self, elapsed: float) -> List[float]:
         p = self._params
         target = self._target
-        close = p.close_angles
+        close = self._target if p.close_from_adaptive else p.close_angles
         thumb_hold = p.thumb_hold_joints
         flex_indices = p.close_flex_indices()
         rot_idx = p.thumb_rot_joint
@@ -163,28 +164,84 @@ class PhasedLerpEngine:
                 return lerp_angles(phase2_target, phase3_target, t)
             phase3_target = list(phase2_target)
 
-        phase4_target = list(phase3_target)
-        for i in flex_indices:
-            phase4_target[i] = close[i]
+        close_thumb = p.close_thumb_joints
+        if close_thumb:
+            finger_flex = [i for i in flex_indices if i not in close_thumb]
+            thumb_flex = [i for i in flex_indices if i in close_thumb]
+            p4a_dur = p.phase4 * p.phase4_split
+            p4b_dur = p.phase4 - p4a_dur
+            t4a_end = t3_end + p4a_dur
+            t4b_end = t4a_end + p4b_dur
 
-        if elapsed < t4_end:
-            t = (elapsed - t3_end) / p.phase4
-            return lerp_angles(phase3_target, phase4_target, t)
+            # P4a: 非拇指 flex 闭合
+            p4a_target = list(phase3_target)
+            for i in finger_flex:
+                p4a_target[i] = close[i]
+            if elapsed < t4a_end:
+                return lerp_angles(phase3_target, p4a_target,
+                                   (elapsed - t3_end) / p4a_dur if p4a_dur > 0 else 1.0)
 
-        out = list(target)
-        for i in flex_indices:
-            out[i] = close[i]
-        return out
+            # P4b: 拇指 flex 闭合
+            p4b_target = list(p4a_target)
+            for i in thumb_flex:
+                p4b_target[i] = close[i]
+            if elapsed < t4b_end:
+                return lerp_angles(p4a_target, p4b_target,
+                                   (elapsed - t4a_end) / p4b_dur if p4b_dur > 0 else 1.0)
+
+            out = list(target)
+            for i in flex_indices:
+                out[i] = close[i]
+            return out
+        else:
+            phase4_target = list(phase3_target)
+            for i in flex_indices:
+                phase4_target[i] = close[i]
+
+            if elapsed < t4_end:
+                t = (elapsed - t3_end) / p.phase4
+                return lerp_angles(phase3_target, phase4_target, t)
+
+            out = list(target)
+            for i in flex_indices:
+                out[i] = close[i]
+            return out
 
     def _compute_close(self, elapsed: float) -> List[float]:
         p = self._params
         flex_indices = p.close_flex_indices()
-        close_to = list(self._start_angles)
-        for i in flex_indices:
-            close_to[i] = p.close_angles[i]
-        if elapsed < p.phase4:
-            return lerp_angles(self._start_angles, close_to, elapsed / p.phase4)
-        return close_to
+        close_thumb = p.close_thumb_joints
+        if close_thumb:
+            finger_flex = [i for i in flex_indices if i not in close_thumb]
+            thumb_flex = [i for i in flex_indices if i in close_thumb]
+            p4a_dur = p.phase4 * p.phase4_split
+            p4b_dur = p.phase4 - p4a_dur
+            t4a_end = p4a_dur
+            t4b_end = t4a_end + p4b_dur
+
+            # P4a: 非拇指 flex 闭合
+            p4a_target = list(self._start_angles)
+            for i in finger_flex:
+                p4a_target[i] = p.close_angles[i]
+            if elapsed < t4a_end:
+                return lerp_angles(self._start_angles, p4a_target,
+                                   elapsed / p4a_dur if p4a_dur > 0 else 1.0)
+
+            # P4b: 拇指 flex 闭合
+            p4b_target = list(p4a_target)
+            for i in thumb_flex:
+                p4b_target[i] = p.close_angles[i]
+            if elapsed < t4b_end:
+                return lerp_angles(p4a_target, p4b_target,
+                                   (elapsed - t4a_end) / p4b_dur if p4b_dur > 0 else 1.0)
+            return p4b_target
+        else:
+            close_to = list(self._start_angles)
+            for i in flex_indices:
+                close_to[i] = p.close_angles[i]
+            if elapsed < p.phase4:
+                return lerp_angles(self._start_angles, close_to, elapsed / p.phase4)
+            return close_to
 
     def _position_reached(self, feedback_angles: List[float]) -> bool:
         p = self._params
@@ -198,12 +255,10 @@ class PhasedLerpEngine:
         ) <= p.position_stop_tolerance
 
     def _check_contact(self, ctx, feedback_angles: List[float]) -> bool:
-        """O6：压感 + 拇弯到位；O20：tracker 电流/压感 + 位置。"""
+        """压感 → 力矩/电流增量 → 位置到达。O6/O20 统一走 FingerContactTracker。"""
         if ctx.tactile_mode != "none":
             if tactile_contact(ctx, tuple(self._params.contact_fingers)):
                 return True
-        if uses_torque_feedback(ctx.hand_type):
-            return self._position_reached(feedback_angles)
         if self._contact.check(ctx, tuple(self._params.contact_fingers)):
             return True
         return self._position_reached(feedback_angles)
@@ -296,17 +351,25 @@ class PhasedLerpEngine:
                     self._progressive_angles = list(raw)
                 if self._guard.frozen:
                     return self._apply_guard(ctx, list(self._progressive_angles))
-                abd_idx = p.progressive_abd_joint
-                flex_idx = p.progressive_flex_joint
                 increment = p.progressive_rate * dt
-                self._progressive_angles[abd_idx] = min(
-                    p.progressive_abd_max,
-                    self._progressive_angles[abd_idx] + increment,
-                )
-                self._progressive_angles[flex_idx] = min(
-                    p.progressive_flex_max,
-                    self._progressive_angles[flex_idx] + increment * 0.5,
-                )
+                if p.progressive_all_joints:
+                    for idx, max_val in zip(
+                        p.progressive_all_joints, p.progressive_all_maxs
+                    ):
+                        self._progressive_angles[idx] = min(
+                            max_val, self._progressive_angles[idx] + increment
+                        )
+                else:
+                    abd_idx = p.progressive_abd_joint
+                    flex_idx = p.progressive_flex_joint
+                    self._progressive_angles[abd_idx] = min(
+                        p.progressive_abd_max,
+                        self._progressive_angles[abd_idx] + increment,
+                    )
+                    self._progressive_angles[flex_idx] = min(
+                        p.progressive_flex_max,
+                        self._progressive_angles[flex_idx] + increment * 0.5,
+                    )
                 return self._apply_guard(ctx, list(self._progressive_angles))
 
         self.grasp_state = "approaching"
@@ -316,6 +379,378 @@ class PhasedLerpEngine:
 
 def make_phased_lerp_engine(hand_type: str, phase: str = "full") -> PhasedLerpEngine:
     return PhasedLerpEngine(load_thumb_adduction_params(hand_type), phase=phase)
+
+
+class RotProgressiveEngine:
+    """rot 先到位再渐进引擎。
+
+    P1: 所有关节（含 rot）lerp 到 YAML angles.target（含 thumb_rot=255）。
+    P2: 非 rot 关节保持 target 不变，rot 从 255 渐进到 abd_max。
+        期间持续检测接触，触碰到即冻结。
+
+    prep 模式: P1 执行 rot 到位 → grasp_state="ready"
+    close/full 模式: P1+P2 全部执行 → grasp_state="contact"
+    """
+
+    def __init__(self, pose_target: List[float], rot_joint: int = 10,
+                 rot_target: float = 200, rot_rate: float = 10.0,
+                 pose_duration: float = 0.35, phase: str = "full",
+                 contact_fingers: Optional[List[int]] = None) -> None:
+        self._pose_target = list(pose_target)
+        self._rot_joint = rot_joint
+        self._rot_target = float(rot_target)
+        self._rot_rate = float(rot_rate)
+        self._pose_duration = float(pose_duration)
+        self._phase = phase
+        self._contact_fingers = list(contact_fingers or [])
+        self._start: List[float] = []
+        self._contact = FingerContactTracker()
+        self._frozen_rot: Optional[float] = None
+        self.grasp_state: str = "approaching"
+
+    def reset(self, start_angles: List[float]) -> None:
+        self._start = list(start_angles[:20])
+        self._contact.reset()
+        self._frozen_rot = None
+        self.grasp_state = "approaching"
+
+    def compute(
+        self,
+        feedback_angles: List[float],
+        elapsed: float,
+        ctx,
+    ) -> List[float]:
+        if not self._start:
+            self.reset(feedback_angles)
+
+        # prep 模式: P1 rot 奔向 255，到位即停
+        if self._phase == "prep":
+            if elapsed >= self._pose_duration:
+                self.grasp_state = "ready"
+                return list(self._pose_target)
+            t = max(0.0, min(1.0, elapsed / self._pose_duration))
+            return [s + (g - s) * t for s, g in zip(self._start, self._pose_target)]
+
+        # full / close 模式
+        #
+        # P1: 所有关节（含 rot）lerp 到 target（rot=255）
+        if elapsed < self._pose_duration:
+            t = max(0.0, min(1.0, elapsed / self._pose_duration))
+            self.grasp_state = "approaching"
+            return [s + (g - s) * t for s, g in zip(self._start, self._pose_target)]
+
+        # P2 开始：捕获基线
+        if not hasattr(self, '_p2_entered'):
+            self._p2_entered = True
+            if self._contact_fingers:
+                self._contact.begin_closing(ctx)
+
+        # 接触冻结后保持当前姿态
+        if self._frozen_rot is not None:
+            self.grasp_state = "contact"
+            out = list(self._pose_target)
+            out[self._rot_joint] = self._frozen_rot
+            return out
+
+        # P2 每 tick 检测接触
+        if self._contact_fingers and self._contact.check(ctx, tuple(self._contact_fingers)):
+            self._frozen_rot = None  # 下面会取当前计算值
+            # 用当前 rot 值冻结
+            rot_elapsed = elapsed - self._pose_duration
+            rot_p1_end = self._pose_target[self._rot_joint]
+            if rot_p1_end > self._rot_target:
+                current_rot = max(rot_p1_end - self._rot_rate * rot_elapsed, self._rot_target)
+            else:
+                current_rot = min(rot_p1_end + self._rot_rate * rot_elapsed, self._rot_target)
+            self._frozen_rot = current_rot
+            self.grasp_state = "contact"
+            out = list(self._pose_target)
+            out[self._rot_joint] = self._frozen_rot
+            return out
+
+        # P2: rot 渐进
+        rot_p1_end = self._pose_target[self._rot_joint]
+        rot_elapsed = elapsed - self._pose_duration
+
+        if rot_p1_end > self._rot_target:
+            new_rot = max(rot_p1_end - self._rot_rate * rot_elapsed, self._rot_target)
+        else:
+            new_rot = min(rot_p1_end + self._rot_rate * rot_elapsed, self._rot_target)
+
+        out = list(self._pose_target)
+        out[self._rot_joint] = new_rot
+
+        if abs(new_rot - self._rot_target) < 1.0:
+            self.grasp_state = "contact"
+        else:
+            self.grasp_state = "progressive"
+
+        return out
+
+
+class FingerAdductionEngine:
+    """双关节渐进并拢引擎 — 专为 index_middle_adduction_grip 设计。
+
+    P0 (可选): 拇指关节 lerp 到 target，其余保持起始值不动。
+    P1: 其余关节 lerp 到 target (abd 在张开位，拇指已是 target)。
+    P2: 两个 abd 从张开位 lerp 到并拢目标，期间接触检测冻结。
+
+    prep 模式: P0+P1 执行到位 → grasp_state="ready"
+    close/full 模式: P0+P1+P2 全部执行 → grasp_state="contact"
+    """
+
+    def __init__(self, pose_target: List[float], joint_a: int = 6, joint_b: int = 7,
+                 close_a: float = 96, close_b: float = 160,
+                 pose_duration: float = 0.35, close_duration: float = 1.0,
+                 phase: str = "full",
+                 contact_fingers: Optional[List[int]] = None,
+                 thumb_joints: Optional[List[int]] = None,
+                 thumb_duration: float = 0.0) -> None:
+        self._pose_target = list(pose_target)
+        self._joint_a = joint_a
+        self._joint_b = joint_b
+        self._close_a = float(close_a)
+        self._close_b = float(close_b)
+        self._pose_duration = float(pose_duration)
+        self._close_duration = float(close_duration)
+        self._phase = phase
+        self._contact_fingers = list(contact_fingers or [])
+        self._thumb_joints = list(thumb_joints or [])
+        self._thumb_duration = float(thumb_duration) if thumb_joints else 0.0
+        self._start: List[float] = []
+        self._contact = FingerContactTracker()
+        self._frozen_pose: Optional[List[float]] = None
+        self.grasp_state: str = "approaching"
+
+    @property
+    def _total_prep(self) -> float:
+        return self._thumb_duration + self._pose_duration
+
+    def reset(self, start_angles: List[float]) -> None:
+        self._start = list(start_angles[:20])
+        self._contact.reset()
+        self._frozen_pose = None
+        self.grasp_state = "approaching"
+
+    def _thumb_target(self) -> List[float]:
+        """P0 终点: 拇指到 target，其余保持初始。"""
+        out = list(self._start)
+        for i in self._thumb_joints:
+            if 0 <= i < 20:
+                out[i] = self._pose_target[i]
+        return out
+
+    def compute(
+        self,
+        feedback_angles: List[float],
+        elapsed: float,
+        ctx,
+    ) -> List[float]:
+        if not self._start:
+            self.reset(feedback_angles)
+
+        total_prep = self._total_prep
+
+        # prep 模式: 到位即停
+        if self._phase == "prep":
+            if elapsed >= total_prep:
+                self.grasp_state = "ready"
+                return list(self._pose_target)
+            # P0: 拇指先行
+            if self._thumb_duration > 0 and elapsed < self._thumb_duration:
+                t = max(0.0, min(1.0, elapsed / self._thumb_duration))
+                thumb_tgt = self._thumb_target()
+                return lerp_angles(self._start, thumb_tgt, t)
+            # P1: 其余到位
+            t0 = self._thumb_duration
+            from_pose = self._thumb_target() if self._thumb_duration > 0 else self._start
+            t = max(0.0, min(1.0, (elapsed - t0) / self._pose_duration)) if self._pose_duration > 0 else 1.0
+            return lerp_angles(from_pose, self._pose_target, t)
+
+        # full / close 模式
+        #
+        # P0: 拇指先行
+        if self._thumb_duration > 0 and elapsed < self._thumb_duration:
+            t = max(0.0, min(1.0, elapsed / self._thumb_duration))
+            self.grasp_state = "approaching"
+            return lerp_angles(self._start, self._thumb_target(), t)
+
+        # P1: 其余关节 lerp 到 target
+        t0 = self._thumb_duration
+        from_pose = self._thumb_target() if self._thumb_duration > 0 else self._start
+        if elapsed < total_prep:
+            t = max(0.0, min(1.0, (elapsed - t0) / self._pose_duration)) if self._pose_duration > 0 else 1.0
+            self.grasp_state = "approaching"
+            return lerp_angles(from_pose, self._pose_target, t)
+
+        # P2 开始：基线捕获
+        if not hasattr(self, '_p2_entered'):
+            self._p2_entered = True
+            if self._contact_fingers:
+                self._contact.begin_closing(ctx)
+
+        # 接触冻结
+        if self._frozen_pose is not None:
+            self.grasp_state = "contact"
+            return list(self._frozen_pose)
+
+        # 每 tick 检测接触
+        if self._contact_fingers and self._contact.check(ctx, tuple(self._contact_fingers)):
+            close_elapsed = elapsed - total_prep
+            progress = min(close_elapsed / self._close_duration, 1.0)
+            freeze = list(self._pose_target)
+            freeze[self._joint_a] = self._pose_target[self._joint_a] + \
+                (self._close_a - self._pose_target[self._joint_a]) * progress
+            freeze[self._joint_b] = self._pose_target[self._joint_b] + \
+                (self._close_b - self._pose_target[self._joint_b]) * progress
+            self._frozen_pose = freeze
+            self.grasp_state = "contact"
+            return list(self._frozen_pose)
+
+        # P2: abd 从张开位 lerp 到并拢目标
+        close_elapsed = elapsed - total_prep
+        progress = min(close_elapsed / self._close_duration, 1.0)
+
+        out = list(self._pose_target)
+        out[self._joint_a] = self._pose_target[self._joint_a] + \
+            (self._close_a - self._pose_target[self._joint_a]) * progress
+        out[self._joint_b] = self._pose_target[self._joint_b] + \
+            (self._close_b - self._pose_target[self._joint_b]) * progress
+
+        if progress >= 1.0:
+            self.grasp_state = "contact"
+        else:
+            self.grasp_state = "progressive"
+
+        return out
+
+
+
+
+
+def adaptive_index_ring_angles(
+    object_size, params: "ThumbAdductionParams",
+) -> List[float]:
+    """根据物体截面直径调整拇食指闭合量。"""
+    angles = list(params.prep_angles)
+    s = sorted(object_size)
+    d_mm = (s[0] + s[1]) / 2.0 * 1000.0
+    angles[0] = int(np.clip(150 - (d_mm - 5) * 2.4, 90, 150))    # thumb_base
+    angles[1] = int(np.clip(170 - (d_mm - 5) * 2.8, 100, 170))   # index_base
+    if params.thumb_rot_joint >= 0:
+        angles[15] = int(np.clip(200 - (d_mm - 5) * 2.0, 140, 200))
+        angles[16] = int(np.clip(150 - (d_mm - 5) * 2.0, 80, 150))
+    return angles
+
+
+def make_index_ring_by_vision_engine(
+    hand_type: str, phase: str = "full",
+) -> Optional[PhasedLerpEngine]:
+    from dataclasses import replace
+    from .gesture_params import load_index_ring_by_vision_params
+    params = load_index_ring_by_vision_params(hand_type)
+    if params is None:
+        return None
+    params = replace(params, adaptive_fn=adaptive_index_ring_angles)
+    return PhasedLerpEngine(params, phase=phase)
+
+
+def adaptive_large_wrap_angles(
+    object_size, params: "ThumbAdductionParams",
+) -> List[float]:
+    """根据物体最大截面直径调整五指包络弯曲量。
+
+    D=40mm → base≈230(紧握); D=100mm → base≈150(半开)
+    """
+    angles = list(params.prep_angles)
+    s = sorted(object_size)
+    D_mm = float(max(s[0], s[1])) * 1000.0
+    base_val = int(np.clip(250 - (D_mm - 30) * 1.4, 130, 240))
+    for i in params.close_flex_indices():
+        angles[i] = base_val
+    return angles
+
+
+def make_large_wrap_by_vision_engine(
+    hand_type: str, phase: str = "full",
+) -> Optional[PhasedLerpEngine]:
+    from dataclasses import replace
+    from .gesture_params import load_large_wrap_by_vision_params
+    params = load_large_wrap_by_vision_params(hand_type)
+    if params is None:
+        return None
+    params = replace(params, adaptive_fn=adaptive_large_wrap_angles)
+    return PhasedLerpEngine(params, phase=phase)
+
+
+def make_tripod_by_vision_engine(
+    hand_type: str, phase: str = "full",
+) -> Optional[PhasedLerpEngine]:
+    from .gesture_params import load_tripod_by_vision_params
+    params = load_tripod_by_vision_params(hand_type)
+    if params is None:
+        return None
+    return PhasedLerpEngine(params, phase=phase)
+
+
+def make_hook_by_vision_engine(
+    hand_type: str, phase: str = "full",
+) -> Optional[PhasedLerpEngine]:
+    from .gesture_params import load_hook_by_vision_params
+    params = load_hook_by_vision_params(hand_type)
+    if params is None:
+        return None
+    return PhasedLerpEngine(params, phase=phase)
+
+
+def make_small_warp_by_vision_engine(
+    hand_type: str, phase: str = "full",
+) -> Optional[PhasedLerpEngine]:
+    from .gesture_params import load_small_warp_by_vision_params
+    params = load_small_warp_by_vision_params(hand_type)
+    if params is None:
+        return None
+    return PhasedLerpEngine(params, phase=phase)
+
+
+def make_no_index_warp_by_vision_engine(
+    hand_type: str, phase: str = "full",
+) -> Optional[PhasedLerpEngine]:
+    from .gesture_params import load_no_index_warp_by_vision_params
+    params = load_no_index_warp_by_vision_params(hand_type)
+    if params is None:
+        return None
+    return PhasedLerpEngine(params, phase=phase)
+
+
+def make_palmar_by_vision_engine(
+    hand_type: str, phase: str = "full",
+) -> Optional[PhasedLerpEngine]:
+    from .gesture_params import load_palmar_by_vision_params
+    params = load_palmar_by_vision_params(hand_type)
+    if params is None:
+        return None
+    return PhasedLerpEngine(params, phase=phase)
+
+
+def make_middle_ring_by_vision_engine(
+    hand_type: str, phase: str = "full",
+) -> Optional[PhasedLerpEngine]:
+    from .gesture_params import load_middle_ring_by_vision_params
+    params = load_middle_ring_by_vision_params(hand_type)
+    if params is None:
+        return None
+    return PhasedLerpEngine(params, phase=phase)
+
+
+def make_ring_by_vision_engine(
+    hand_type: str, phase: str = "full",
+) -> Optional[PhasedLerpEngine]:
+    from .gesture_params import load_ring_by_vision_params
+    params = load_ring_by_vision_params(hand_type)
+    if params is None:
+        return None
+    return PhasedLerpEngine(params, phase=phase)
 
 
 class StaticPoseEngine:
@@ -520,17 +955,21 @@ class SequentialForceCloseEngine:
 
     def _mark_blocked_groups(self, ctx) -> None:
         """全程扫描：已接触的组单独标记，不影响其他组。"""
+        import sys as _sys
         for step in self._params.steps:
             for g in step.groups:
                 if self._stopped.get(g.group_id):
                     continue
                 if self._group_contact(ctx, g):
+                    print(f"[SFCE] CONTACT step={step.name}[{self._step_index}] "
+                          f"group={g.group_id} mon={g.monitor_hw} "
+                          f"delta={g.contact_delta}", file=_sys.stderr)
                     self._stopped[g.group_id] = True
 
     def _init_stopped_flags(self) -> None:
         if self._step_index < len(self._params.steps):
             for g in self._params.steps[self._step_index].groups:
-                self._stopped.setdefault(g.group_id, False)
+                self._stopped[g.group_id] = False  # force reset (setdefault could leave stale True from preshape)
 
     def _feedback_baseline(self, ctx) -> List[float]:
         """全程力反馈基线：close 阶段 settle 后刷新 _baseline，此前用 motion 起始基线。"""
@@ -552,11 +991,14 @@ class SequentialForceCloseEngine:
     def _tick_close_groups(self, ctx) -> None:
         step_cfg = self._params.steps[self._step_index]
         all_done = True
+        import sys as _sys
         for g in step_cfg.groups:
             if self._stopped.get(g.group_id):
+                print(f"[SFCE] group {g.group_id} already stopped", file=_sys.stderr)
                 continue
             all_done = False
             if self._group_contact(ctx, g):
+                print(f"[SFCE] CONTACT on {g.group_id}!", file=_sys.stderr)
                 self._stopped[g.group_id] = True
                 continue
             moved = False
@@ -564,14 +1006,19 @@ class SequentialForceCloseEngine:
                 if ji < 0 or ji >= len(self._close_angles):
                     continue
                 if self._close_angles[ji] < g.close_max:
+                    old = self._close_angles[ji]
                     self._close_angles[ji] = min(
                         g.close_max, self._close_angles[ji] + g.step)
                     moved = True
+                    print(f"[SFCE] inc ji={ji} {old:.0f}->{self._close_angles[ji]:.0f} (step={g.step})", file=_sys.stderr)
                 else:
                     self._stopped[g.group_id] = True
+                    print(f"[SFCE] ji={ji} at max, stopping group {g.group_id}", file=_sys.stderr)
             if not moved and not self._stopped.get(g.group_id):
                 self._stopped[g.group_id] = True
+                print(f"[SFCE] no move, stopping {g.group_id}", file=_sys.stderr)
         if all_done or all(self._stopped.get(g.group_id) for g in step_cfg.groups):
+            print(f"[SFCE] step {self._step_index} complete, advancing", file=_sys.stderr)
             self._step_index += 1
             self._settle_count = 0
             if self._step_index < len(self._params.steps):
@@ -636,12 +1083,16 @@ class SequentialForceCloseEngine:
                 self._settle_count += 1
                 if self._settle_count == p.settle_frames:
                     self._baseline = capture_feedback_baseline(ctx)
-                self._mark_blocked_groups(ctx)
+                    import sys as _sys
+                    print(f"[SFCE] settle done, baseline={self._baseline}", file=_sys.stderr)
+                # 不在此处 _mark_blocked_groups：马达尚未稳定，运动力矩 ＞ 静息基线 → 误触
                 self._close_angles = self._finalize_output(list(self._close_angles))
                 return list(self._close_angles)
             self._mark_blocked_groups(ctx)
             self._tick_close_groups(ctx)
             self._close_angles = self._finalize_output(list(self._close_angles))
+            import sys as _sys
+            print(f"[SFCE] close phase mid[2]={self._close_angles[2]:.1f} step={self._step_index} stopped={self._stopped}", file=_sys.stderr)
             return list(self._close_angles)
 
         self._tick_hold(ctx)
@@ -666,3 +1117,32 @@ def make_ring_engine(hand_type: str) -> Optional[SequentialForceCloseEngine]:
 
 def make_middle_ring_engine(hand_type: str) -> Optional[SequentialForceCloseEngine]:
     return make_sequential_force_close_engine(hand_type, "middle_ring")
+
+
+def make_middle_ring_by_vision_sfce_engine(hand_type: str) -> Optional[SequentialForceCloseEngine]:
+    """middle_ring_by_vision SFCE 引擎（O6 顺序力控）。"""
+    return make_sequential_force_close_engine(hand_type, "middle_ring_by_vision")
+
+
+def make_tripod_by_vision_sfce_engine(hand_type: str) -> Optional[SequentialForceCloseEngine]:
+    return make_sequential_force_close_engine(hand_type, "tripod_by_vision")
+
+
+def make_hook_by_vision_sfce_engine(hand_type: str) -> Optional[SequentialForceCloseEngine]:
+    return make_sequential_force_close_engine(hand_type, "hook_by_vision")
+
+
+def make_small_warp_by_vision_sfce_engine(hand_type: str) -> Optional[SequentialForceCloseEngine]:
+    return make_sequential_force_close_engine(hand_type, "small_warp_by_vision")
+
+
+def make_no_index_warp_by_vision_sfce_engine(hand_type: str) -> Optional[SequentialForceCloseEngine]:
+    return make_sequential_force_close_engine(hand_type, "no_index_warp_by_vision")
+
+
+def make_ring_by_vision_sfce_engine(hand_type: str) -> Optional[SequentialForceCloseEngine]:
+    return make_sequential_force_close_engine(hand_type, "ring_by_vision")
+
+
+def make_palmar_by_vision_sfce_engine(hand_type: str) -> Optional[SequentialForceCloseEngine]:
+    return make_sequential_force_close_engine(hand_type, "palmar_by_vision")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import yaml
 
@@ -64,6 +64,7 @@ def _load_raw_gestures(hand_type: str) -> dict:
 def _semantic_from_sparse(sparse: Mapping[str, Any]) -> List[float]:
     """稀疏 joint 名 / O20 索引 → 20 维 semantic 向量。"""
     out = [0.0] * 20
+    keys_set = set()
     for key, val in sparse.items():
         if isinstance(key, int) or (isinstance(key, str) and key.isdigit()):
             idx = int(key)
@@ -72,8 +73,9 @@ def _semantic_from_sparse(sparse: Mapping[str, Any]) -> List[float]:
         if idx is None or idx < 0 or idx >= 20:
             continue
         out[idx] = float(val)
+        keys_set.add(idx)
     for i in (6, 7, 8, 9):
-        if out[i] == 0.0:
+        if i not in keys_set:
             out[i] = float(ABD_NEUTRAL)
     for i in RESERVED_INDICES:
         out[i] = 0.0
@@ -93,7 +95,7 @@ def hw_pose_to_semantic(
 
 @dataclass(frozen=True)
 class ThumbAdductionParams:
-    """thumb_adduction_grip 手型相关参数（已规范为 O20 semantic 20 维）。"""
+    """PhasedLerpEngine 手型相关参数（已规范为 O20 semantic 20 维）。"""
 
     hand_type: str
     prep_angles: List[float]
@@ -115,6 +117,15 @@ class ThumbAdductionParams:
     position_stop_joint: Optional[int] = None
     position_stop_target_semantic: Optional[float] = None
     position_stop_tolerance: float = 5.0
+    # by_vision 扩展
+    adaptive_fn: Optional[Callable] = field(default=None, compare=False, hash=False)
+    close_from_adaptive: bool = False
+    progressive_all_joints: Optional[List[int]] = None
+    progressive_all_maxs: Optional[List[float]] = None
+    # P4a/P4b 拆分：拇指关节延后到 P4b 闭合
+    close_thumb_joints: List[int] = field(default_factory=list)
+    phase4_split: float = 0.5
+    engine: str = ""  # "" / "phased_lerp" = 旧引擎, "rot_progressive" = 新引擎
 
     @property
     def prep_end(self) -> float:
@@ -209,6 +220,16 @@ def _parse_thumb_adduction(raw: dict, hand_type: str, hand: HandConfig) -> Thumb
         position_stop_joint=pos_idx,
         position_stop_target_semantic=pos_target,
         position_stop_tolerance=float(contact.get("position_tolerance", 5.0)),
+        close_from_adaptive=bool(close_sec.get("from_adaptive", False)),
+        progressive_all_joints=(
+            [int(x) for x in prog["all_joints"]] if "all_joints" in prog else None
+        ),
+        progressive_all_maxs=(
+            [float(x) for x in prog["all_maxs"]] if "all_maxs" in prog else None
+        ),
+        close_thumb_joints=[int(x) for x in joints.get("close_thumb", [])],
+        phase4_split=float(motion.get("phase4_split", 0.5)),
+        engine=str(raw.get("engine", "")),
     )
 
 
@@ -222,12 +243,89 @@ def load_thumb_adduction_params(hand_type: str) -> ThumbAdductionParams:
     return _parse_thumb_adduction(raw, hand_type, hand)
 
 
+# ---------------------------------------------------------------------------
+# index_middle_adduction_grip — 双关节渐进并拢参数
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class FingerAdductionParams:
+    """index_middle_adduction_grip 参数（已规范为 O20 semantic 20 维）。"""
+
+    hand_type: str
+    prep_angles: List[float]      # P1 到位目标 (abd 在张开位)
+    joint_a: int = 6              # 渐进关节A (index_abd)
+    joint_b: int = 7              # 渐进关节B (middle_abd)
+    close_a: float = 96.0         # A 并拢目标
+    close_b: float = 160.0        # B 并拢目标
+    phase1: float = 0.35          # P1 到位时长 (秒)
+    close_duration: float = 1.0   # 并拢时长 (秒)
+    thumb_joints: List[int] = field(default_factory=list)   # 拇指先行关节
+    thumb_duration: float = 0.0   # 拇指先行时长 (秒)
+    contact_fingers: List[int] = field(default_factory=lambda: [1, 2])
+    engine: str = ""  # "" = 旧硬编码逻辑, "finger_adduction" = 新引擎
+
+
+
+
+
+@lru_cache(maxsize=16)
+def load_finger_adduction_params(hand_type: str) -> FingerAdductionParams:
+    """加载指定手型的 index_middle_adduction_grip 参数（带缓存）。"""
+    hand_type = hand_type.lower()
+    hand = HandConfig(hand_type)
+    gestures = _load_raw_gestures(hand_type)
+    raw = gestures.get("index_middle_adduction_grip") or {}
+    return _parse_finger_adduction(raw, hand_type, hand)
+
+
+
+
+
+def _parse_finger_adduction(raw: dict, hand_type: str, hand: HandConfig) -> FingerAdductionParams:
+    angles_sec = raw.get("angles") or {}
+    prep, _close = _parse_angles(angles_sec, hand)
+    motion = raw.get("motion") or {}
+    adduction = raw.get("adduction") or {}
+    contact = raw.get("contact") or {}
+
+    thumb = raw.get("thumb") or {}
+
+    return FingerAdductionParams(
+        hand_type=hand_type,
+        prep_angles=prep,
+        joint_a=int(adduction.get("joint_a", 6)),
+        joint_b=int(adduction.get("joint_b", 7)),
+        close_a=float(adduction.get("close_a", 96)),
+        close_b=float(adduction.get("close_b", 160)),
+        phase1=float(motion.get("phase1", 0.35)),
+        close_duration=float(adduction.get("duration", 1.0)),
+        thumb_joints=[int(x) for x in thumb.get("joints", [])],
+        thumb_duration=float(thumb.get("duration", 0.0)),
+        contact_fingers=[int(x) for x in contact.get("fingers", [1, 2])],
+        engine=str(raw.get("engine", "")),
+    )
+
+
+
+
+
+
 def clear_gesture_params_cache() -> None:
     load_thumb_adduction_params.cache_clear()
+    load_finger_adduction_params.cache_clear()
     load_static_gesture_params.cache_clear()
     load_sequential_force_close_params.cache_clear()
     load_ring_params.cache_clear()
     load_middle_ring_params.cache_clear()
+    load_tripod_by_vision_params.cache_clear()
+    load_hook_by_vision_params.cache_clear()
+    load_small_warp_by_vision_params.cache_clear()
+    load_no_index_warp_by_vision_params.cache_clear()
+    load_palmar_by_vision_params.cache_clear()
+    load_index_ring_by_vision_params.cache_clear()
+    load_large_wrap_by_vision_params.cache_clear()
+    load_middle_ring_by_vision_params.cache_clear()
+    load_ring_by_vision_params.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -480,14 +578,8 @@ def _grip_o20() -> List[float]:
 
 
 # L25 专用 25-DOF（与 open_hand.py / init_hand.py 一致）
-_L25_OPEN = [
-    159, 0, 0, 0, 0, 105, 141, 104, 66, 0, 75, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-]
-_L25_INIT = [
-    85, 55, 55, 55, 55, 135, 127, 127, 127, 127, 115, 0, 0, 0, 0,
-    55, 55, 55, 55, 55, 75, 75, 75, 75, 75,
-]
+_L25_OPEN = _open_o20()
+_L25_INIT = _init_o20()
 
 _DEFAULT_STATIC: Dict[str, Dict[str, Any]] = {
     "open": {
@@ -593,7 +685,23 @@ def _resolve_static_target(
         return builder()
     if hand_type == "l25" and primitive in _L25_TARGET_BUILDERS:
         return _L25_TARGET_BUILDERS[primitive]()
+    # L25/未知手型 fallback 到 O20 canonical semantic
+    # (to_hardware 负责逐关节转换为目标硬件)
+    o20_builder = _STATIC_TARGET_BUILDERS.get(("o20", primitive))
+    if o20_builder:
+        return o20_builder()
     return _open_o20()
+
+
+def resolve_static_target_angles(
+    hand_type: str, primitive: str, default: List[float],
+) -> List[float]:
+    """若手型 YAML gestures 中有该原语则返回语义角，否则 default。"""
+    ht = hand_type.lower()
+    primitive = primitive.lower()
+    if primitive not in (_load_raw_gestures(ht) or {}):
+        return list(default)
+    return list(load_static_gesture_params(ht, primitive).target_angles)
 
 
 def _parse_static_gesture(
@@ -662,17 +770,6 @@ def load_static_gesture_params(hand_type: str, primitive: str) -> StaticGestureP
     gestures = _load_raw_gestures(hand_type)
     raw = gestures.get(primitive) or {}
     return _parse_static_gesture(primitive, raw, hand_type, hand)
-
-
-def resolve_static_target_angles(
-    hand_type: str, primitive: str, default: List[float],
-) -> List[float]:
-    """若手型 YAML gestures 中有该原语则返回语义角，否则 default。"""
-    ht = hand_type.lower()
-    primitive = primitive.lower()
-    if primitive not in (_load_raw_gestures(ht) or {}):
-        return list(default)
-    return list(load_static_gesture_params(ht, primitive).target_angles)
 
 
 # ---------------------------------------------------------------------------
@@ -865,3 +962,71 @@ def load_ring_params(hand_type: str) -> Optional[SequentialForceCloseParams]:
 def load_middle_ring_params(hand_type: str) -> Optional[SequentialForceCloseParams]:
     """加载 middle_ring 的 sequential_force_close 配置；无配置或非该类型返回 None。"""
     return load_sequential_force_close_params(hand_type, "middle_ring")
+
+
+def _load_by_vision_phased_params(hand_type: str, primitive: str) -> Optional[ThumbAdductionParams]:
+    """通用: 加载 by_vision 原语的 PhasedLerp 参数；SFCE/static/无配置时返回 None。"""
+    hand_type = hand_type.lower()
+    gestures = _load_raw_gestures(hand_type)
+    raw = gestures.get(primitive)
+    if not raw or not raw.get("motion"):
+        return None
+    motion = raw.get("motion") or {}
+    if motion.get("type") in ("sequential_force_close", "static"):
+        return None
+    hand = HandConfig(hand_type)
+    return _parse_thumb_adduction(raw, hand_type, hand)
+
+
+@lru_cache(maxsize=16)
+def load_tripod_by_vision_params(hand_type: str) -> Optional[ThumbAdductionParams]:
+    """加载 tripod_by_vision 的 PhasedLerp 参数；无配置返回 None。"""
+    return _load_by_vision_phased_params(hand_type, "tripod_by_vision")
+
+
+@lru_cache(maxsize=16)
+def load_hook_by_vision_params(hand_type: str) -> Optional[ThumbAdductionParams]:
+    """加载 hook_by_vision 的 PhasedLerp 参数；无配置返回 None。"""
+    return _load_by_vision_phased_params(hand_type, "hook_by_vision")
+
+
+@lru_cache(maxsize=16)
+def load_small_warp_by_vision_params(hand_type: str) -> Optional[ThumbAdductionParams]:
+    """加载 small_warp_by_vision 的 PhasedLerp 参数；无配置返回 None。"""
+    return _load_by_vision_phased_params(hand_type, "small_warp_by_vision")
+
+
+@lru_cache(maxsize=16)
+def load_no_index_warp_by_vision_params(hand_type: str) -> Optional[ThumbAdductionParams]:
+    """加载 no_index_warp_by_vision 的 PhasedLerp 参数；无配置返回 None。"""
+    return _load_by_vision_phased_params(hand_type, "no_index_warp_by_vision")
+
+
+@lru_cache(maxsize=16)
+def load_palmar_by_vision_params(hand_type: str) -> Optional[ThumbAdductionParams]:
+    """加载 palmar_by_vision 的 PhasedLerp 参数；无配置返回 None。"""
+    return _load_by_vision_phased_params(hand_type, "palmar_by_vision")
+
+
+@lru_cache(maxsize=16)
+def load_index_ring_by_vision_params(hand_type: str) -> Optional[ThumbAdductionParams]:
+    """加载 index_ring_by_vision 的 PhasedLerp 参数；无配置返回 None。"""
+    return _load_by_vision_phased_params(hand_type, "index_ring_by_vision")
+
+
+@lru_cache(maxsize=16)
+def load_large_wrap_by_vision_params(hand_type: str) -> Optional[ThumbAdductionParams]:
+    """加载 large_wrap_by_vision 的 PhasedLerp 参数；无配置返回 None。"""
+    return _load_by_vision_phased_params(hand_type, "large_wrap_by_vision")
+
+
+@lru_cache(maxsize=16)
+def load_middle_ring_by_vision_params(hand_type: str) -> Optional[ThumbAdductionParams]:
+    """加载 middle_ring_by_vision 的 PhasedLerp 参数；无配置返回 None。"""
+    return _load_by_vision_phased_params(hand_type, "middle_ring_by_vision")
+
+
+@lru_cache(maxsize=16)
+def load_ring_by_vision_params(hand_type: str) -> Optional[ThumbAdductionParams]:
+    """加载 ring_by_vision 的 PhasedLerp 参数；无配置返回 None。"""
+    return _load_by_vision_phased_params(hand_type, "ring_by_vision")

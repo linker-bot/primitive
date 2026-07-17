@@ -30,6 +30,11 @@ from .palmar_by_vision import PalmarByVision
 from .parallel_extension_by_vision import ParallelExtensionByVision
 from .parallel_extension import ParallelExtension
 from .disk_by_vision import DiskByVision
+from .index_flick import IndexFlick
+from .index_middle_flick import IndexMiddleFlick
+from .twist2digit import Twist2Digit
+from .twist3digit import Twist3Digit
+from .twist5digit import Twist5Digit
 
 PRIMITIVE_REGISTRY = {
     "open": OpenHand,
@@ -62,4 +67,9 @@ PRIMITIVE_REGISTRY = {
     "parallel_extension_by_vision": ParallelExtensionByVision,
     "parallel_extension": ParallelExtension,
     "disk_by_vision": DiskByVision,
+    "index_flick": IndexFlick,
+    "index_middle_flick": IndexMiddleFlick,
+    "twist2digit": Twist2Digit,
+    "twist3digit": Twist3Digit,
+    "twist5digit": Twist5Digit,
 }

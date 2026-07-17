@@ -19,6 +19,7 @@ from ..primitive_base import (
     HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
     lerp_angles, ABD_NEUTRAL,
 )
+from ..gesture_params import load_static_gesture_params
 
 REACH_THRESHOLD = 0.15
 PALM_FORWARD_MIN = 0.02
@@ -62,6 +63,20 @@ class ParallelExtensionByVision(HandGesturePrimitive):
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
+        if ctx.hand_type == "o6":
+            params = load_static_gesture_params("o6", self.name)
+            t = elapsed / params.duration
+            if t >= 1.0:
+                return self._move(list(params.target_angles))
+            return self._move(lerp_angles(self._start_angles, params.target_angles, t))
+
+        if ctx.hand_type == "l25":
+            params = load_static_gesture_params("l25", self.name)
+            t = elapsed / params.duration
+            if t >= 1.0:
+                return self._move(list(params.target_angles))
+            return self._move(lerp_angles(self._start_angles, params.target_angles, t))
+
         if ctx.tcp_pose is None:
             return self._hold("缺少 tcp_pose")
 

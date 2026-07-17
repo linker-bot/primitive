@@ -24,6 +24,8 @@ from ..primitive_base import (
     HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
     lerp_angles, ABD_NEUTRAL, HAND_CONFIGS, HandConfig,
 )
+from ..gesture_engine import PhasedLerpEngine, make_tripod_by_vision_engine
+from ..gesture_params import load_tripod_by_vision_params, load_static_gesture_params
 
 _logger = logging.getLogger(__name__)
 
@@ -102,6 +104,9 @@ class TripodByVision(HandGesturePrimitive):
     """
 
     def __init__(self):
+        self._engine: Optional[PhasedLerpEngine] = None
+        self._engine_hand_type: str = ""
+        self._grasp_state: str = "approaching"
         self._phase = _Phase.PRESHAPE
         self._close_angles: List[float] = []
         self._baseline_currents: List[float] = []
@@ -111,15 +116,32 @@ class TripodByVision(HandGesturePrimitive):
         self._thumb_stopped = False
         self._thumb_rot: Optional[int] = None
         self._cfg: Optional[HandConfig] = None
-        self.grasp_state: str = "approaching"
         self._forward_hold_logged: bool = False
 
     @property
     def name(self) -> str:
         return "tripod_by_vision"
 
+    @property
+    def grasp_state(self) -> str:
+        if self._engine is not None:
+            return self._engine.grasp_state
+        return self._grasp_state
+
+    def _ensure_engine(self, ctx: PrimitiveContext) -> PhasedLerpEngine:
+        if self._engine is None or self._engine_hand_type != ctx.hand_type:
+            self._engine = make_tripod_by_vision_engine(ctx.hand_type)
+            if self._engine is None:
+                raise RuntimeError(f"tripod_by_vision config engine missing for {ctx.hand_type}")
+            self._engine.reset(self._start_angles)
+            self._engine_hand_type = ctx.hand_type
+        return self._engine
+
     def on_enter(self, current_angles: List[float]) -> None:
         super().on_enter(current_angles)
+        self._engine = None
+        self._engine_hand_type = ""
+        self._grasp_state = "approaching"
         self._phase = _Phase.PRESHAPE
         self._baseline_currents = [0.0] * len(current_angles)
         self._settle_count = 0
@@ -128,7 +150,6 @@ class TripodByVision(HandGesturePrimitive):
         self._thumb_stopped = False
         self._thumb_rot = None
         self._cfg = None
-        self.grasp_state = "approaching"
         self._forward_hold_logged = False
 
     def _runtime_forward_hold(self, ctx: PrimitiveContext) -> bool:
@@ -156,10 +177,18 @@ class TripodByVision(HandGesturePrimitive):
     def _compute_thumb_rot(self, ctx: PrimitiveContext) -> int:
         label = ctx.object_label
         if not label:
+            if ctx.hand_type == "l25":
+                params = load_static_gesture_params("l25", self.name)
+                if params.target_angles[10] > 0:
+                    return int(params.target_angles[10])
             return _THUMB_ROT_DEFAULT
 
         mesh = _load_mesh(label)
         if mesh is None:
+            if ctx.hand_type == "l25":
+                params = load_static_gesture_params("l25", self.name)
+                if params.target_angles[10] > 0:
+                    return int(params.target_angles[10])
             return _THUMB_ROT_DEFAULT
 
         if ctx.object_pose is not None:
@@ -230,6 +259,11 @@ class TripodByVision(HandGesturePrimitive):
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
+        if load_tripod_by_vision_params(ctx.hand_type) is not None:
+            engine = self._ensure_engine(ctx)
+            raw = engine.compute(current_angles, elapsed, ctx)
+            return self._move(raw)
+
         cfg = self._get_cfg(ctx)
 
         if self._runtime_forward_hold(ctx):
@@ -237,7 +271,7 @@ class TripodByVision(HandGesturePrimitive):
                 _logger.warning(
                     "tripod_by_vision: 物体不在掌心前方 2–15cm，保持当前姿态")
                 self._forward_hold_logged = True
-            self.grasp_state = "approaching"
+            self._grasp_state = "approaching"
             return self._hold("物体不在掌心前方 2–15cm")
 
         contact_delta = ctx.contact_thresholds.current_delta
@@ -249,17 +283,25 @@ class TripodByVision(HandGesturePrimitive):
             if self._thumb_rot is None:
                 self._thumb_rot = self._compute_thumb_rot(ctx)
 
-            target = self._build_preshape_target(cfg)
+            if ctx.hand_type == "l25":
+                params = load_static_gesture_params("l25", self.name)
+                if any(v > 0 for v in params.target_angles):
+                    target = list(params.target_angles)
+                    target[cfg.thumb_rot] = self._thumb_rot
+                else:
+                    target = self._build_preshape_target(cfg)
+            else:
+                target = self._build_preshape_target(cfg)
             t = elapsed / PRESHAPE_DURATION
             if t >= 1.0:
                 self._phase = _Phase.CLOSE_FINGERS
                 self._close_angles = list(target)
                 self._baseline_currents = list(ctx.joint_currents)
                 self._settle_count = 0
-                self.grasp_state = "closing"
+                self._grasp_state = "closing"
                 _logger.warning("tripod_by_vision: 进入食+中指闭合阶段")
                 return self._move(list(target))
-            self.grasp_state = "approaching"
+            self._grasp_state = "approaching"
             return self._move(lerp_angles(self._start_angles, target, t))
 
         # === Phase 2: 食指和中指同时闭合 ===
@@ -270,7 +312,7 @@ class TripodByVision(HandGesturePrimitive):
                 self._settle_count += 1
                 if self._settle_count == settle_frames:
                     self._baseline_currents = list(currents)
-                self.grasp_state = "closing"
+                self._grasp_state = "closing"
                 return self._move(list(self._close_angles))
 
             base = self._baseline_currents
@@ -315,7 +357,7 @@ class TripodByVision(HandGesturePrimitive):
                 self._phase = _Phase.CLOSE_THUMB
                 self._settle_count = 0
 
-            self.grasp_state = "closing"
+            self._grasp_state = "closing"
             return self._move(list(self._close_angles))
 
         # === Phase 3: 拇指闭合 ===
@@ -326,7 +368,7 @@ class TripodByVision(HandGesturePrimitive):
                 self._settle_count += 1
                 if self._settle_count == settle_frames:
                     self._baseline_currents = list(currents)
-                self.grasp_state = "closing"
+                self._grasp_state = "closing"
                 return self._move(list(self._close_angles))
 
             base = self._baseline_currents
@@ -349,9 +391,9 @@ class TripodByVision(HandGesturePrimitive):
             if self._thumb_stopped:
                 _logger.warning("tripod_by_vision: 拇指闭合完成 → HOLD")
                 self._phase = _Phase.HOLD
-                self.grasp_state = "contact"
+                self._grasp_state = "contact"
 
-            self.grasp_state = "closing"
+            self._grasp_state = "closing"
             return self._move(list(self._close_angles))
 
         # === Phase 4: 保持 ===
@@ -367,7 +409,7 @@ class TripodByVision(HandGesturePrimitive):
                 over = currents[idx] - hold_safe
                 step = max(1, int(over / 30))
                 self._close_angles[idx] = max(0, self._close_angles[idx] - step)
-        self.grasp_state = "contact"
+        self._grasp_state = "contact"
         return self._move(list(self._close_angles))
 
 

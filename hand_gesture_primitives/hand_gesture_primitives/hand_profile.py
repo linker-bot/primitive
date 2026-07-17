@@ -8,7 +8,13 @@ from typing import Dict, List, Optional, Set
 
 import yaml
 
-from .hand_config import HandConfig, _find_config_path, _CONFIG_DIR
+from .hand_config import (
+    HandConfig,
+    HAND_TYPE_ALIASES,
+    _find_config_path,
+    _CONFIG_DIR,
+    resolve_hand_config_key,
+)
 from .primitive_catalog import (
     CAP_CURRENT,
     CAP_FINGER_ABD,
@@ -326,13 +332,20 @@ def format_reject_message(
 
 
 def load_hand_profile(hand_type_or_joint: str) -> HandProfile:
-    """按 hand_type / hand_joint 加载档案（大小写不敏感）。"""
+    """按 hand_type / hand_joint 加载档案（大小写不敏感）。
+
+    支持 HAND_TYPE_ALIASES（如 L20 → l25）：加载目标档案后
+    HandProfile.hand_type 为规范名（l25），原语内部按 L25 处理。
+    """
     key = hand_type_or_joint.strip()
     if not key:
         raise ValueError("hand_type / hand_joint 不能为空")
     available = {n.lower(): n for n in list_configured_hand_joints()}
-    normalized = key.lower()
+    normalized = resolve_hand_config_key(key)
     if normalized not in available:
+        aliases = ", ".join(
+            f"{a}→{t}" for a, t in sorted(HAND_TYPE_ALIASES.items()))
+        hint = f"；别名: {aliases}" if aliases else ""
         raise FileNotFoundError(
-            f"未找到手型配置 {key!r}，可用: {sorted(available.values())}")
+            f"未找到手型配置 {key!r}，可用: {sorted(available.values())}{hint}")
     return HandProfile(available[normalized])

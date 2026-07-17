@@ -32,7 +32,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('hand_side', default_value='left'),
         DeclareLaunchArgument('hand_joint', default_value='O20',
-                             description='手部型号: O20 / L25'),
+                             description='手部型号: O20 / L25 / L20 (L20≡L25)'),
         DeclareLaunchArgument('shape', default_value='cylinder',
                              description='box / cylinder / small / large'),
         DeclareLaunchArgument('label', default_value='',

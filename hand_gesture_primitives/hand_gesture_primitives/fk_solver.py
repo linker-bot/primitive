@@ -19,7 +19,8 @@ _CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
 
 def _load_fk_config(hand_joint: str) -> Optional[dict]:
     """从 YAML 配置加载 FK 段。返回 None 如果不存在。"""
-    filename = f"{hand_joint.lower()}.yaml"
+    from .hand_config import resolve_hand_config_key
+    filename = f"{resolve_hand_config_key(hand_joint)}.yaml"
     # 尝试 ament share
     try:
         from ament_index_python.packages import get_package_share_directory
@@ -390,18 +391,22 @@ def create_fk_solver(
     """安全创建 FK 求解器，失败时返回 None。
 
     优先从 YAML config 加载 FK 配置，无 YAML 时使用内置默认。
+    L20 等别名会归一到对应档案（如 l25）的 FK / URDF。
     """
     if not _YOURDFPY_AVAILABLE:
         if logger:
             logger.warn("yourdfpy 未安装, FK 求解器不可用")
         return None
 
+    from .hand_config import resolve_hand_config_key
+    canonical = resolve_hand_config_key(hand_joint)
+
     # 尝试从 YAML 加载 FK 配置
-    fk_config = _load_fk_config(hand_joint)
+    fk_config = _load_fk_config(canonical)
 
     # 无 YAML FK 配置: 使用 hand_joint → model 映射 + 内置默认
     if fk_config is None:
-        model = _HAND_JOINT_TO_FK_MODEL.get(hand_joint.upper())
+        model = _HAND_JOINT_TO_FK_MODEL.get(canonical.upper())
         if model is None:
             if logger:
                 logger.warn(
@@ -413,14 +418,18 @@ def create_fk_solver(
 
     try:
         solver = HandFKSolver(
-            fk_config.get("urdf_model", hand_joint.lower()),
+            fk_config.get("urdf_model", canonical),
             hand_side,
             urdf_path,
             fk_config=fk_config,
         )
         if logger:
+            alias_note = (
+                f" (alias {hand_joint}→{canonical})"
+                if canonical != hand_joint.strip().lower() else ""
+            )
             logger.info(
-                f"FK 求解器初始化成功: hand_joint={hand_joint}, "
+                f"FK 求解器初始化成功: hand_joint={canonical}{alias_note}, "
                 f"model={solver._hand_model}, side={hand_side}, "
                 f"base_link={solver.base_link}, "
                 f"urdf={solver.urdf_path}, "

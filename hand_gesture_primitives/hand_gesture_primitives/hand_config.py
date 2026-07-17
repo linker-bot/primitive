@@ -9,10 +9,22 @@ import yaml
 # 默认配置目录 (source tree, 开发时使用)
 _CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
 
+# 用户对外型号 → 实际 config 基名（同协议不同版本）。
+# L20 / L25 为同一硬件协议的两个版本；控制与原语统一按 l25 档案运行。
+HAND_TYPE_ALIASES = {
+    "l20": "l25",
+}
+
+
+def resolve_hand_config_key(hand_joint: str) -> str:
+    """将 hand_type / hand_joint 归一为 config 文件基名（小写）。"""
+    key = hand_joint.strip().lower()
+    return HAND_TYPE_ALIASES.get(key, key)
+
 
 def _find_config_path(hand_joint: str) -> str:
     """查找配置文件路径: 先 ament share, 再 source tree。"""
-    filename = f"{hand_joint.lower()}.yaml"
+    filename = f"{resolve_hand_config_key(hand_joint)}.yaml"
     # 尝试 ament 安装路径
     try:
         from ament_index_python.packages import get_package_share_directory

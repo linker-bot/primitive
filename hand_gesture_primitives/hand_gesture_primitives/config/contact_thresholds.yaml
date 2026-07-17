@@ -18,7 +18,7 @@ contact:
   hold_safe_current: 800
 
   # O6 hand.torque (0~100 无量纲%，100≈1657.5mA)：增量判接触 / 持握上限 / pinch 停指
-  torque_delta_pct: 15.0
+  torque_delta_pct: 30.0
   hold_safe_torque_pct: 55.0
   pinch_torque_stop_pct: 15.0
   # 静态 pinch 堵转绝对力矩 (0~100%)；空载 timed lerp 不应触发
