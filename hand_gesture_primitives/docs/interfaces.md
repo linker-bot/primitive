@@ -75,7 +75,8 @@
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `hand_side` | string | `"left"` | 手侧：`left` / `right` |
-| `hand_type` | string | `"o20"` | 手型：`o20`（20-DOF）/ `l25`（25-DOF） |
+| `hand_type` | string | `"o20"` | 手型：`o20`（20-DOF）/ `o6`（6-DOF）/ `l25`（25-DOF）；`l20` 是 `l25` 兼容别名 |
+| `hand_joint` | string | `""` | 手型兼容参数；非空时覆盖 `hand_type`，可填 `O20` / `O6` / `L25` / `L20` |
 | `cmd_topic` | string | `"/hand_gesture_cmd_exec"` | 指令输入 topic |
 | `tcp_pose_topic` | string | `"/tcp_pose"` | TCP 位姿 topic |
 | `object_pose_topic` | string | `"/object_pose"` | 物体位姿 topic（world frame，通常由 GraspGate 发布） |
@@ -168,7 +169,7 @@ hand +Z = +TCP_Z (手指前方)
 
 ## joint_state_bridge
 
-将手部硬件 O20/L25 格式反馈转为 URDF 弧度，供 `robot_state_publisher` 驱动 RViz 模型。
+将手部硬件 O20/O6/L25 格式反馈转为 URDF 弧度，供 `robot_state_publisher` 驱动 RViz 模型；L20 按 L25 档案处理。
 
 ### 订阅 Topic
 
@@ -187,7 +188,7 @@ hand +Z = +TCP_Z (手指前方)
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `hand_side` | string | `"left"` | 手侧 |
-| `hand_joint` | string | `"L25"` | 手型标识 |
+| `hand_joint` | string | `"L25"` | 手型标识：`O20` / `O6` / `L25` / `L20` |
 | `urdf_path` | string | `""` | URDF 路径（空=自动搜索） |
 
 ---
@@ -204,7 +205,7 @@ hand +Z = +TCP_Z (手指前方)
 
 | 指令 | 格式 | 说明 |
 |------|------|------|
-| `<原语名>` | `pinch` / `open` / `fist` / `tripod_by_vision` ... | 执行对应原语（共 24 个） |
+| `<原语名>` | `pinch` / `open` / `fist` / `tripod_by_vision` ... | 执行对应原语（全局注册 35 个，按当前手型 allowlist 过滤） |
 | `<原语名> <label>` | `index_ring_by_vision screwdriver` | 执行原语 + 设置目标 label 过滤 |
 | `<原语名> prep` | `thumb_adduction_grip prep` | 仅执行预备阶段（侧向夹持原语） |
 | `<原语名> close` | `thumb_adduction_grip close` | 执行闭合阶段 |
@@ -213,17 +214,25 @@ hand +Z = +TCP_Z (手指前方)
 | `target_id <id>` | `target_id 3` | 按 instance_id 过滤（0=清除） |
 | `stop` | `stop` | 停止当前原语，保持最终姿态 |
 
-### 可用原语名（24 个）
+### 可用原语名（全局 35 个）
 
-| 类别 | 指令 |
-|------|------|
-| 安全/复位 | `init` `open` `release` `relax_grip` |
-| 固定手势 | `fist` `pinch` `point` `ok_sign` `v_sign` |
-| 精细捏取 | `index_pinch_by_vision` `middle_pinch_by_vision` |
-| 感知自适应 | `index_ring_by_vision` `large_wrap_by_vision` |
-| 侧向夹持 | `thumb_adduction_grip` `index_middle_adduction_grip` |
-| 力控包络 | `middle_ring_by_vision` `ring_by_vision` `small_warp_by_vision` `no_index_warp_by_vision` `hook_by_vision` `tripod_by_vision` `palmar_by_vision` |
-| 定位捏取/包络 | `index_pinch_by_vision` `middle_pinch_by_vision` `parallel_extension_by_vision` `disk_by_vision` |
+| 类别 | 数量 | 指令 |
+|------|-----:|------|
+| 安全/固定 | 9 | `init` `open` `release` `relax_grip` `fist` `pinch` `point` `ok_sign` `v_sign` |
+| 非视觉抓取 | 8 | `thumb_adduction_grip` `index_middle_adduction_grip` `tripod` `ring` `middle_ring` `index_pinch` `middle_pinch` `parallel_extension` |
+| 视觉抓取 | 13 | `index_ring_by_vision` `large_wrap_by_vision` `middle_ring_by_vision` `ring_by_vision` `small_warp_by_vision` `no_index_warp_by_vision` `hook_by_vision` `index_pinch_by_vision` `middle_pinch_by_vision` `tripod_by_vision` `palmar_by_vision` `parallel_extension_by_vision` `disk_by_vision` |
+| L25/L20 动态操作 | 5 | `index_flick` `index_middle_flick` `twist2digit` `twist3digit` `twist5digit` |
+
+手型 allowlist 统计：
+
+| 手型 | 支持数 | 差异 |
+|------|------:|------|
+| O6 | 28 | 不支持 `index_middle_adduction_grip`、`parallel_extension` 和 5 个 L25/L20 动态原语；其中 16 个原语会记录能力警告并以 MCP 近似姿态执行 |
+| O20 | 30 | 不支持 5 个 L25/L20 动态原语 |
+| L25 | 35 | 支持全部注册原语 |
+| L20 | 35 | `l25` 兼容别名，复用 L25 档案 |
+
+O6 的能力警告不会拒绝执行；`gesture_node` 记录 `capability_warning` 后继续。`auto`、`stop`、`target`、`target_id` 是控制命令，`prep`/`close` 是执行阶段，均不计入上述 35 个原语。逐原语支持矩阵见 [primitives.md](primitives.md)。
 
 ### 状态反馈格式
 
@@ -257,7 +266,7 @@ DONE: <name>                      # 原语完成
 
 ### JointState 控制指令
 
-发布到 `/cb_{side}_hand_control_cmd`：
+发布到 `/cb_{side}_hand_control_cmd`。以下为 O20 的 20-DOF 示例：
 
 ```yaml
 header:
@@ -266,10 +275,12 @@ name: [thumb_base, index_base, middle_base, ring_base, pinky_base,
        thumb_abd, index_abd, middle_abd, ring_abd, pinky_abd,
        thumb_rot, reserved_11, reserved_12, reserved_13, reserved_14,
        thumb_tip, index_tip, middle_tip, ring_tip, pinky_tip]
-position: [0.0 ~ 255.0] × 20    # O20: 0=伸直, 255=弯曲 (L25 反转)
+position: [0.0 ~ 255.0] × 20    # O20: 0=伸直, 255=弯曲
 velocity: [0.0] × 20
 effort: [0.0] × 20
 ```
+
+实际数组长度和 `name` 顺序由手型配置决定：O6 为 6、O20 为 20、L25/L20 为 25；L25/L20 的基础弯曲和拇指关节方向与 O20 相反（255=伸直，0=弯曲）。
 
 ### hand_info JSON 格式
 
@@ -362,7 +373,7 @@ LinkerHand 驱动
   ◀── /cb_left_hand_control_cmd ────────┘
 ```
 
-仅支持安全/固定类原语（`init`、`open`、`fist`、`pinch` 等）。
+无需感知输入的安全、固定、非视觉抓取和 L25/L20 动态原语可以直接执行；视觉原语缺少 bbox/TCP/object_pose 时无法完成对应的自适应或定位流程。默认 `reach_check_strict=false`，无目标位姿只记录可达性警告；严格模式会拒绝非安全原语。
 
 ### 标准配置（感知 + 门控）
 
@@ -380,7 +391,7 @@ robot_perception                    机械臂驱动
   └── bboxes_3d ──▶ hand_gesture_node (object_size / grasp_type)
 ```
 
-支持全部 24 个原语：自适应闭合、力控包络、auto 映射等。
+可使用当前手型 allowlist 中的全部原语，包括自适应闭合、力控包络和 `auto` 映射：O6 为 28 个、O20 为 30 个、L25/L20 为 35 个。
 
 ### 最小感知配置（无门控）
 
@@ -412,7 +423,7 @@ ros2 launch hand_gesture_primitives gesture_node.launch.py \
 
 | 驱动 Topic | 方向 | 说明 |
 |-----------|------|------|
-| `/cb_{side}_hand_control_cmd` | 本包 → 驱动 | 20/25-DOF 目标角度 |
+| `/cb_{side}_hand_control_cmd` | 本包 → 驱动 | 6/20/25-DOF 目标角度 |
 | `/cb_{side}_hand_state` | 驱动 → 本包 | 关节角度反馈 |
 | `/cb_{side}_hand_info` | 驱动 → 本包 | 电流/温度 JSON |
 | `/cb_{side}_hand_force` | 驱动 → 本包 | 触觉压感 |
@@ -420,4 +431,4 @@ ros2 launch hand_gesture_primitives gesture_node.launch.py \
 | `/cb_{side}_hand_matrix_touch_mass` | 驱动 → 本包 | 矩阵压感合值 |
 | `/cb_{side}_hand_motor_torque` | 驱动 → 本包 | 关节力矩 |
 
-兼容 LinkerHand O20 和 L25 驱动，通过 `hand_type` 参数自动适配关节数量与角度方向。
+兼容 LinkerHand O6、O20 和 L25 驱动，通过 `hand_type` 参数自动适配关节数量与角度方向；L20 作为 L25 的同协议兼容别名运行。

@@ -371,6 +371,55 @@ _DEFAULT_FK_CONFIGS: Dict[str, dict] = {
             },
         },
     },
+    "l6": {
+        "urdf_model": "linkerhand_l6",
+        "base_link": "lh_hand_base_link",
+        "invert_joints": ["lh_thumb_cmc_pitch"],
+        "fingertip_links": [
+            "lh_thumb_distal", "lh_index_distal", "lh_middle_distal",
+            "lh_ring_distal", "lh_pinky_distal",
+        ],
+        "tip_offsets": {
+            "lh_thumb_distal": [-0.003, 0.0, 0.013],
+            "lh_index_distal": [0.005, 0.0, 0.020],
+            "lh_middle_distal": [0.005, 0.0, 0.020],
+            "lh_ring_distal": [0.005, 0.0, 0.020],
+            "lh_pinky_distal": [0.005, 0.0, 0.020],
+        },
+        "o20_to_urdf_joint": {
+            0: "lh_thumb_cmc_pitch",
+            5: "lh_thumb_cmc_roll",
+            1: "lh_index_mcp_pitch",
+            2: "lh_middle_mcp_pitch",
+            3: "lh_ring_mcp_pitch",
+            4: "lh_pinky_mcp_pitch",
+        },
+        "side_overrides": {
+            "right": {
+                "base_link": "rh_hand_base_link",
+                "invert_joints": ["rh_thumb_cmc_pitch"],
+                "fingertip_links": [
+                    "rh_thumb_distal", "rh_index_distal", "rh_middle_distal",
+                    "rh_ring_distal", "rh_pinky_distal",
+                ],
+                "tip_offsets": {
+                    "rh_thumb_distal": [-0.003, 0.0, 0.013],
+                    "rh_index_distal": [0.005, 0.0, 0.020],
+                    "rh_middle_distal": [0.005, 0.0, 0.020],
+                    "rh_ring_distal": [0.005, 0.0, 0.020],
+                    "rh_pinky_distal": [0.005, 0.0, 0.020],
+                },
+                "o20_to_urdf_joint": {
+                    0: "rh_thumb_cmc_pitch",
+                    5: "rh_thumb_cmc_roll",
+                    1: "rh_index_mcp_pitch",
+                    2: "rh_middle_mcp_pitch",
+                    3: "rh_ring_mcp_pitch",
+                    4: "rh_pinky_mcp_pitch",
+                },
+            },
+        },
+    },
 }
 
 # hand_joint 参数 → FK 使用的配置名
@@ -379,6 +428,7 @@ _HAND_JOINT_TO_FK_MODEL = {
     "L20": "l20",
     "O20": "o20",
     "O6": "o6",
+    "L6": "l6",
 }
 
 

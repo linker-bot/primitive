@@ -38,6 +38,7 @@ _MODEL_ALIASES = {
     "L20": "l20",
     "L25": "l25",
     "O6": "o6",
+    "L6": "l6",
 }
 
 
@@ -59,6 +60,30 @@ def resolve_urdf_path(hand_model: str, hand_side: str, urdf_path: str = "") -> s
         path = os.path.join(base, model, side, filename)
         if os.path.isfile(path):
             return path
+
+    # 搜索 ~/assets/components/hands/ 下的 hand.urdf (如 linkerhand_l6)
+    assets_hands = os.path.join(os.path.expanduser("~"), "assets", "components", "hands")
+    if os.path.isdir(assets_hands):
+        target_name = f"linkerhand_{model}"
+        for hand_name in sorted(os.listdir(assets_hands)):
+            hand_dir = os.path.join(assets_hands, hand_name)
+            if hand_name.lower() == target_name.lower():
+                variant = os.path.join(hand_dir, "variants", side, "hand.urdf")
+                if os.path.isfile(variant):
+                    return variant
+            # 通过 meta.yaml name 字段匹配
+            meta = os.path.join(hand_dir, "meta.yaml")
+            if os.path.isfile(meta):
+                try:
+                    import yaml as _yaml
+                    with open(meta, "r", encoding="utf-8") as f:
+                        m = _yaml.safe_load(f) or {}
+                    if m.get("name", "").lower() == target_name.lower():
+                        variant = os.path.join(hand_dir, "variants", side, "hand.urdf")
+                        if os.path.isfile(variant):
+                            return variant
+                except Exception:
+                    pass
 
     raise FileNotFoundError(
         f"找不到 URDF: model={hand_model}, side={hand_side}, "

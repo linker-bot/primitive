@@ -55,8 +55,8 @@ class IndexPinchByVision(HandGesturePrimitive):
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
-        if ctx.hand_type == "o6":
-            params = load_static_gesture_params("o6", self.name)
+        if ctx.hand_type in ("o6", "l6"):
+            params = load_static_gesture_params(ctx.hand_type, self.name)
             t = elapsed / params.duration
             if t >= 1.0:
                 return self._move(list(params.target_angles))

@@ -80,8 +80,8 @@ class DiskByVision(HandGesturePrimitive):
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
-        if ctx.hand_type == "o6":
-            params = load_static_gesture_params("o6", self.name)
+        if ctx.hand_type in ("o6", "l6"):
+            params = load_static_gesture_params(ctx.hand_type, self.name)
             target = list(params.target_angles)
             # P1: 仅 thumb_abd[5] 侧摆定位
             p1_target = list(self._start_angles)
