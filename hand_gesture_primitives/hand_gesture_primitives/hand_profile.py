@@ -52,6 +52,9 @@ _PRIMITIVE_ALTERNATIVES: Dict[str, Dict[str, str]] = {
     "o6": {
         "index_middle_adduction_grip": "thumb_adduction_grip",
     },
+    "l6": {
+        "index_middle_adduction_grip": "thumb_adduction_grip",
+    },
 }
 
 

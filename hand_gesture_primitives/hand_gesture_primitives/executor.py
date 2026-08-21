@@ -83,7 +83,7 @@ class GestureExecutor:
         from .gesture_params import clear_gesture_params_cache
         clear_gesture_params_cache()
         self._primitive_space_dim = (
-            20 if hand_type == "o6" else self._hand_config.num_joints
+            20 if hand_type in ("o6", "l6") else self._hand_config.num_joints
         )
         self._active_primitive: Optional[HandGesturePrimitive] = None
         self._primitive_start_time: float = 0.0
@@ -408,7 +408,7 @@ class GestureExecutor:
 
     def _state_callback(self, msg: JointState) -> None:
         n = len(msg.position)
-        if self._hand_type in ("o6", "l25") and self._profile is not None:
+        if self._hand_type in ("o6", "l6", "l25") and self._profile is not None:
             if n == self._profile.hardware.num_joints:
                 self._current_angles = self._profile.hardware.from_hardware(
                     list(msg.position))
@@ -422,14 +422,14 @@ class GestureExecutor:
         """原语关节空间 → 驱动发布向量。
 
         O20: identity（20-DOF 直接发布）。
-        O6 / L25: 经 YAML 配置 from_o20 逐关节映射（方向/耦合/校准）。
+        O6 / L6 / L25: 经 YAML 配置 from_o20 逐关节映射（方向/耦合/校准）。
         """
         o20 = list(semantic[:20])
         while len(o20) < 20:
             o20.append(0.0)
         for i in RESERVED_INDICES:
             o20[i] = 0.0
-        if self._hand_type in ("o6", "l25") and self._profile is not None:
+        if self._hand_type in ("o6", "l6", "l25") and self._profile is not None:
             hw = self._profile.hardware.to_hardware(o20)
             return [max(0.0, min(255.0, v)) for v in hw]
         n = self._hand_config.num_joints
@@ -486,7 +486,7 @@ class GestureExecutor:
     def _log_motion_started(self, primitive_name: str, target: List[float]) -> None:
         if self._motion_logged:
             return
-        if self._hand_type == "o6" and self._profile is not None:
+        if self._hand_type in ("o6", "l6") and self._profile is not None:
             hw_current = self._profile.hardware.to_hardware(
                 list(self._current_angles[:20]))
             compare = hw_current
