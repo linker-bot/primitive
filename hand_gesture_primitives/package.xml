@@ -2,25 +2,39 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>hand_gesture_primitives</name>
-  <version>0.1.0</version>
-  <description>LinkerHand 手势原语控制节点 (O20/L25)</description>
+  <version>0.2.2</version>
+  <description>LinkerHand 手势原语（O20/L25/O30/O6/L6/G20；内部 semantic_30）</description>
   <maintainer email="opensource@linkerbot.ai">LinkerHand Team</maintainer>
+  <!-- Implementation, including workbench modules: MIT. -->
   <license>MIT</license>
+  <!-- Bundled O6 model resources retain their existing Apache-2.0 license. -->
+  <license>Apache-2.0</license>
 
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>robot_perception_msgs</exec_depend>
+  <!-- 姿态库 / PlanGesture 服务接口（gesture_node 启动的硬依赖） -->
+  <depend>hand_gesture_primitives_msgs</depend>
+  <!-- HandForce 触觉反馈（executor 内 try/except 保护，缺失时降级到 matrix_touch） -->
+  <exec_depend>hand_force_msg</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-filelock</exec_depend>
+  <!-- Noble's apt package is v1; the standalone Jazzy venv supplies v2.
+       See docs/workbench.md; skip this rosdep key when preparing that venv. -->
+  <exec_depend version_gte="2.0.0" version_lt="3.0.0">python3-pydantic</exec_depend>
+  <!-- FK 指尖: Pinocchio (apt: ros-$ROS_DISTRO-pinocchio / pip: pin) -->
+  <exec_depend>pinocchio</exec_depend>
 
-  <test_depend>ament_copyright</test_depend>
-  <test_depend>ament_flake8</test_depend>
-  <test_depend>ament_pep257</test_depend>
+  <!-- 风格门禁改用 ruff（见仓库根 pyproject.toml），不再使用 ament lint -->
   <test_depend>python3-pytest</test_depend>
+  <test_depend>python3-venv</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

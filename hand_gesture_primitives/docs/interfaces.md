@@ -1,434 +1,249 @@
-# 接口文档
+# ROS 与姿态数据接口（0.2.2）
 
-本文档描述 `hand_gesture_primitives` 包对外暴露的 ROS2 接口：Topic、参数、消息格式与节点关系。
+本文说明本包实际提供的接口。环境与完整启动命令见[安装指南](../../docs/getting-started.md)，
+网页操作见[用户手册](../../docs/teach-panel-user-guide.md)。下文 `{side}` 为 `left` 或 `right`。
 
----
+## 节点与启动前提
 
-## 节点概览
+| 可执行文件 | 职责 |
+| --- | --- |
+| `gesture_node` | 接收手势命令、执行原语、发布控制目标和状态；提供 `PlanGesture` |
+| `grasp_gate` | 按目标几何条件过滤需要门控的指令 |
+| `teach_panel` | 独立 Mock 或连接 ROS 原语节点的网页面板 |
+| `pose_library_server` | 可选的姿态库 ROS 服务，网页直接访问共享姿态库时不必启动 |
+| `joint_state_bridge` | 将反馈转换为 mesh URDF 的关节状态，用于可视化 |
+| `mock_perception` | 模拟目标几何；不提供手驱动或关节反馈 |
 
-| 节点名 | 可执行文件 | 功能 |
-|--------|-----------|------|
-| `hand_gesture_node` | `gesture_node` | 指令解析 + 10Hz 原语执行器 |
-| `grasp_gate` | `grasp_gate` | 抓取可行性三条件门控（可选） |
-| `joint_state_bridge` | `joint_state_bridge` | 硬件反馈 → URDF 弧度转换（RViz 可视化） |
-| `mock_perception` | `mock_perception` | 模拟感知输出（测试用） |
+真实 ROS 接入需先准备设备驱动、新鲜反馈及对应控制器的 `robot_description`。
+默认后端使用弧度目标；省略实际 URDF 的启动命令不能作为通用真机部署方式。
+`gesture_node` 初始化会选择 `init`，完整启动顺序与停止确认步骤见安装指南。
 
----
+## gesture_node 的主要参数
 
-## 数据流
+下表为节点声明的默认值；launch 可覆盖它们。`hand_joint` 非空时覆盖 `hand_type`。
 
-```
-                    ┌─────────────────────────────┐
-                    │  外部感知 (robot_perception)  │
-                    │  bboxes_3d / labeled_poses   │
-                    └──────────────┬──────────────┘
-                                   │
-/hand_gesture_cmd ──┐              │
-                    ▼              ▼
-              ┌──────────┐   ┌──────────────────────────┐
-              │GraspGate │──▶│ hand_gesture_node        │
-              │(可选门控) │   │  GestureNode + Executor  │
-              └──────────┘   └────────────┬─────────────┘
-                                          │
-                    ┌─────────────────────┼─────────────────────────┐
-                    ▼                     ▼                         ▼
-    /cb_{side}_hand_control_cmd   /hand_gesture_status   /hand_gesture/result
-    (JointState, 10Hz)            (String, 0.5Hz)        (String, ~1Hz)
-```
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `hand_side` | `left` | 左右侧 |
+| `hand_type` | `o20` | 支持 o20、o6、l6、l25、o30、g20；l20 使用 l25 配置 |
+| `hand_joint` | 空 | 兼容的手型覆盖参数 |
+| `state_topic` | `/joint_states` | 实际关节反馈 |
+| `cmd_backend` | 空 | 当前六种配置手型自动选择 `ros2_control`；也可显式选择 `legacy_cb` |
+| `ros2_control_command_units` | `radians` | `radians` 或 `hardware`；`legacy_cb` 必须配合 `hardware` |
+| `robot_description` | 空 | 控制器关节顺序与限位 URDF XML；弧度控制和 ROS 工作台需要 |
+| `g20_joint_order` | 空 | G20 的 native / l25_urdf 关节排列选择 |
+| `control_rate` | `10.0` | 启动时控制频率，范围 1–200 Hz；运行中不能改此参数 |
+| `primitive_speed` | `1.0` | 运行速度倍率，范围 0.25–3.0，可动态设置 |
+| `cmd_topic` | 空 | 自动使用 `/{side}_hand/gesture_cmd`；启用 gate 的 launch 改为 `gesture_cmd_exec` |
+| `hand_cmd_topic` | 空 | 按后端选择下表中的控制输出 |
+| `tcp_pose_topic` | 空 | 自动使用 `/{side}_hand/tcp_pose` |
+| `object_pose_topic` | 空 | 自动使用 `/{side}_hand/object_pose` |
+| `bboxes_3d_topic` | `/camera_head/detection_bbox/bboxes_3d` | 几何与 grasp_type 输入 |
+| `labeled_pose_topic` | `/camera_head/perception/labeled_poses` | 可选的其他感知输入 |
+| `motion_progress_topic` | 空 | 自动使用 `/{side}_hand/motion_progress` |
+| `stream_target_topic` | 空 | 自动使用 `/{side}_hand/stream_target` |
+| `stream_watchdog_sec` | `0.5` | STREAM 断流后保持当前目标 |
+| `urdf_path` | 空 | FK 几何模型路径，与控制器 `robot_description` 的用途不同 |
+| `publish_fingertips` | `true` | 有效 FK 时发布指尖位置与 marker |
+| `contact_config_path` | 空 | 接触阈值 YAML；空时读取随包配置 |
 
----
+接触、过载阈值由 `config/contact_thresholds.yaml`、手型配置及相应 ROS 参数共同决定。
+应按设备反馈量纲核对，不能把电流 mA、力矩百分比和触觉值互换。
 
-## hand_gesture_node
+## 主要话题
 
-### 订阅 Topic
+### 输入
 
-| Topic | 消息类型 | 频率 | 说明 |
-|-------|---------|------|------|
-| `/hand_gesture_cmd_exec` | `std_msgs/String` | 按需 | 手势指令输入（可通过参数 `cmd_topic` 自定义） |
-| `/cb_{side}_hand_state` | `sensor_msgs/JointState` | ~50Hz | 手部关节角度反馈（0–255） |
-| `/cb_{side}_hand_info` | `std_msgs/String` | ~10Hz | 手部信息 JSON（含 `current_current` 电流数组） |
-| `/tcp_pose` | `geometry_msgs/PoseStamped` | ~30Hz | 机械臂末端 TCP 位姿 |
-| `/object_pose` | `geometry_msgs/PoseStamped` | ~5Hz | 目标物体位姿（**world frame**；默认由 GraspGate 从 `bboxes_3d.center` 填充） |
-| `bboxes_3d` | `robot_perception_msgs/LabeledBBox3DArray` | ~5Hz | 感知 3D 包围盒（含 size/grasp_type） |
-| `labeled_poses` | `robot_perception_msgs/LabeledPoseArray` | 可选 | 感知物体位姿数组（world frame）；**detection_bbox 未发布**，需外部节点或未来扩展 |
-| `/cb_{side}_hand_force` | `std_msgs/Float32MultiArray` | ~10Hz | 单点触觉压感（前 5 元素为各指法向力） |
-| `/cb_{side}_hand_normal_force` | `std_msgs/Float32MultiArray` | ~10Hz | SDK 法向力（每指一个值） |
-| `/cb_{side}_hand_matrix_touch_mass` | `std_msgs/String` | ~10Hz | 矩阵压感 JSON（每指总压力质量 g） |
-| `/cb_{side}_hand_motor_torque` | `std_msgs/Float32MultiArray` | ~10Hz | 关节力矩反馈 |
-| `/grasp_gate/selected_label` | `std_msgs/String` | 按需 | 门控选中的物体 label |
+| 默认话题 | 类型 | 语义 |
+| --- | --- | --- |
+| `/{side}_hand/gesture_cmd` | `std_msgs/String` | 空格分隔的命令文本，不是 JSON |
+| `/{side}_hand/gesture_cmd_exec` | `std_msgs/String` | gate 过滤后的执行入口，仅供启用门控的节点使用 |
+| `/joint_states` | `sensor_msgs/JointState` | 驱动反馈，按手型和关节名提取 |
+| `/{side}_hand/motion_progress` | `std_msgs/Float32` | 更新当前支持进度控制的段，范围 0–1 |
+| `/{side}_hand/stream_target` | `sensor_msgs/JointState` | STREAM 目标；量纲与排列见下节 |
+| `/{side}_hand/tcp_pose` | `geometry_msgs/PoseStamped` | 集成方提供的 TCP 位姿 |
+| `/{side}_hand/object_pose` | `geometry_msgs/PoseStamped` | 目标位姿；可由 gate 或其他感知组件提供 |
+| `/camera_head/detection_bbox/bboxes_3d` | `robot_perception_msgs/LabeledBBox3DArray` | 目标位置、尺寸、类别与抓取类型 |
+| `/camera_head/perception/labeled_poses` | `robot_perception_msgs/LabeledPoseArray` | 可选的带标签位姿数组 |
 
-> `{side}` = `left` 或 `right`，由参数 `hand_side` 决定。
-> `robot_perception_msgs` 为可选依赖，缺失时自动降级（仅使用 `/object_pose`）。
+力反馈按设备接入 `/cb_{side}_hand_info`（`std_msgs/String`）、
+`/cb_{side}_hand_force`（`hand_force_msg/HandForce`）、
+`/cb_{side}_hand_normal_force` 和 `/cb_{side}_hand_motor_torque`（`std_msgs/Float32MultiArray`），
+或 `/cb_{side}_hand_matrix_touch_mass`（`std_msgs/String`）。不是所有手型都提供这些输入。
+代码对部分可选消息导入有降级处理，但完整部署仍应按安装指南编译消息包。
 
-### 发布 Topic
+### 输出
 
-| Topic | 消息类型 | 频率 | 说明 |
-|-------|---------|------|------|
-| `/cb_{side}_hand_control_cmd` | `sensor_msgs/JointState` | 10Hz | 目标关节角度（0–255，始终发送） |
-| `/hand_gesture_status` | `std_msgs/String` | 0.5Hz | 当前状态：`原语名\|grasp=状态\|type=...\|suggest=...` |
-| `/hand_gesture/result` | `std_msgs/String` | ~1Hz | 执行状态文本：`IDLE` / `EXECUTING: name` / `DONE: name` |
-| `/cb_{side}_hand_fingertip_positions` | `std_msgs/Float32MultiArray` | 10Hz | FK 指尖位置 [5×3] xyz (m)，手基坐标系 |
-| `/cb_{side}_hand_fingertip_markers` | `visualization_msgs/MarkerArray` | 10Hz | RViz 指尖球体 marker（5 个彩色球体） |
+| 默认话题 | 类型 | 语义 |
+| --- | --- | --- |
+| `/{side}_hand_controller/commands` | `std_msgs/Float64MultiArray` | ros2_control 目标，按 `control_rate` 下发 |
+| `/cb_{side}_hand_control_cmd` | `sensor_msgs/JointState` | legacy_cb 的产品关节 0–255 目标 |
+| `/{side}_hand/gesture_status` | `std_msgs/String` | 每 0.5 秒发布，即约 2 Hz |
+| `/{side}_hand/gesture_result` | `std_msgs/String` | 执行结果；周期检查约 1 Hz，通常只在结果改变时发送，另有即时结果 |
+| `/cb_{side}_hand_fingertip_positions` | `std_msgs/Float32MultiArray` | 有效 FK 时的五指 xyz，单位米 |
+| `/cb_{side}_hand_fingertip_markers` | `visualization_msgs/MarkerArray` | FK 指尖可视化 |
 
-### 参数
+工作台还使用 `/{side}_hand/gesture_catalog`、`workbench_command`、`workbench_result`
+三个 `std_msgs/String` JSON 话题，协议版本为 v2。执行身份和控制语义见
+[工作台协议](../../docs/workbench.md#ros-控制与进度协议)。它们与原始 `gesture_cmd` 文本协议不同。
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `hand_side` | string | `"left"` | 手侧：`left` / `right` |
-| `hand_type` | string | `"o20"` | 手型：`o20`（20-DOF）/ `o6`（6-DOF）/ `l25`（25-DOF）；`l20` 是 `l25` 兼容别名 |
-| `hand_joint` | string | `""` | 手型兼容参数；非空时覆盖 `hand_type`，可填 `O20` / `O6` / `L25` / `L20` |
-| `cmd_topic` | string | `"/hand_gesture_cmd_exec"` | 指令输入 topic |
-| `tcp_pose_topic` | string | `"/tcp_pose"` | TCP 位姿 topic |
-| `object_pose_topic` | string | `"/object_pose"` | 物体位姿 topic（world frame，通常由 GraspGate 发布） |
-| `bboxes_3d_topic` | string | `"/camera_head/detection_bbox/bboxes_3d"` | 3D 包围盒 topic |
-| `labeled_pose_topic` | string | `"/camera_head/perception/labeled_poses"` | 感知位姿数组 topic（可选；detection_bbox 未发布） |
-| `target_object_label` | string | `""` | 目标物体 label（空=自动选最高 score；非空须与 `bboxes_3d.label` 一致） |
-| `result_topic` | string | `"/hand_gesture/result"` | 执行结果 topic |
-| `selected_label_topic` | string | `"/grasp_gate/selected_label"` | 门控选中 label topic |
-| `reach_check_strict` | bool | `false` | 严格模式：不可达时拒绝执行 |
-| `reach_max_distance` | float | `0.15` | TCP→目标最大允许距离 (m) |
-| `palm_offset_x` | float | `0.0` | 掌心相对 TCP 偏移 X (m) |
-| `palm_offset_y` | float | `0.0` | 掌心相对 TCP 偏移 Y (m) |
-| `palm_offset_z` | float | `-0.05` | 掌心相对 TCP 偏移 Z (m) |
-| `publish_fingertips` | bool | `true` | 是否发布 FK 指尖位置 |
-| `fingertip_frame` | string | `""` | 指尖 marker frame_id（空=自动） |
-| `urdf_path` | string | `""` | URDF 路径（空=自动搜索） |
-| `contact_config_path` | string | `""` | 接触/电流阈值 YAML（空=包内 `config/contact_thresholds.yaml`） |
-| `contact_pressure_threshold` | float | `20.0` | 触觉压感接触阈值 (0–255) |
-| `contact_mass_threshold` | float | `2.0` | 矩阵触觉质量阈值 (g) |
-| `contact_current_delta` | float | `270` | 无触觉时电流增量接触阈值 (mA) |
-| `contact_current_delta_narrow` | float | `250` | 窄物体力控原语电流增量 (mA) |
-| `contact_current_settle_frames` | int | `10` | 电流基线稳定帧数 (@10Hz) |
-| `hold_safe_current` | float | `800` | 力控持握安全电流上限 (mA) |
-| `overload_current_threshold` | float | `1000` | 全局过载保护阈值 (mA) |
-| `overload_duration_sec` | float | `2.0` | 过载保护持续时间 (s) |
+常规 `gesture_status` 形如：
 
-默认阈值见安装目录 `share/hand_gesture_primitives/config/contact_thresholds.yaml`，可按现场负载修改 YAML 或通过 launch 参数覆盖。
-
----
-
-## grasp_gate
-
-### 订阅 Topic
-
-| Topic | 消息类型 | 说明 |
-|-------|---------|------|
-| `/hand_gesture_cmd` | `std_msgs/String` | 用户原始手势指令 |
-| `/tcp_pose` | `geometry_msgs/PoseStamped` | TCP 位姿 |
-| `bbox_topic` | `robot_perception_msgs/LabeledBBox3DArray` | 3D 包围盒 |
-| `labeled_pose_topic` | `robot_perception_msgs/LabeledPoseArray` | 感知位姿（备选） |
-
-### 发布 Topic
-
-| Topic | 消息类型 | 说明 |
-|-------|---------|------|
-| `/hand_gesture_cmd_exec` | `std_msgs/String` | 过滤后的指令（转发给 gesture_node） |
-| `/grasp_gate/status` | `std_msgs/String` | 门控判定结果：`OK: cmd, 'label' fwd=Xm` / `REJECT: cmd, reason` |
-| `/object_pose` | `geometry_msgs/PoseStamped` | 选中物体位姿（world frame，供 gesture_node 可达性检查） |
-
-### 参数
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `tcp_pose_topic` | string | `"/tcp_pose"` | TCP 位姿 topic |
-| `bbox_topic` | string | `"/camera_head/detection_bbox/bboxes_3d"` | 3D 包围盒 topic |
-| `labeled_pose_topic` | string | `"/camera_head/perception/labeled_poses"` | 感知位姿 topic（可选 fallback；detection_bbox 未发布） |
-| `input_cmd_topic` | string | `"/hand_gesture_cmd"` | 原始指令输入 |
-| `output_cmd_topic` | string | `"/hand_gesture_cmd_exec"` | 过滤后指令输出 |
-| `status_topic` | string | `"/grasp_gate/status"` | 状态输出 topic |
-| `selected_pose_topic` | string | `"/object_pose"` | 选中物体位姿输出 |
-| `palm_z` | float | `0.06` | TCP → 掌心 Z 偏移 (m) |
-| `tip_z` | float | `0.18` | TCP → 指尖 Z 偏移 (m) |
-| `half_w` | float | `0.20` | 掌面左右半宽 (m) |
-| `half_h` | float | `0.15` | 掌面上下半高 (m) |
-| `height_tol` | float | `0.05` | 高度 Z 容差 (m) |
-| `data_timeout` | float | `2.0` | 数据过期时间 (s) |
-| `de_bounce` | int | `3` | 连续通过帧数阈值 |
-
-### 门控逻辑
-
-对 **11 个**包络/定位原语执行三条件判定，其余指令直接转发：
-
-`ring_by_vision` `small_warp_by_vision` `no_index_warp_by_vision` `middle_ring_by_vision` `hook_by_vision` `tripod_by_vision` `palmar_by_vision` `parallel_extension_by_vision` `index_pinch_by_vision` `middle_pinch_by_vision` `disk_by_vision`
-
-| 条件 | 判定方式 | 通过条件 |
-|------|---------|---------|
-| **H** (高度) | 物体世界 Z 范围 ∩ 手世界 Z 可达范围 | 有交叠 |
-| **XY** (掌面) | 物体中心在手坐标系掌面矩形内 | \|cx\| < half_w 且 \|cy\| < half_h |
-| **Fwd** (前方) | 物体在手坐标系中的 Z 坐标 | cz > 0 |
-
-坐标系转换：世界 → TCP → R_z(90°) → 手坐标系
-
-```
-hand +X = -TCP_Y (掌面左右)
-hand +Y = +TCP_X (掌面上下)
-hand +Z = +TCP_Z (手指前方)
+```text
+<active>|mode=<mode>|speed=<倍率>|control_rate=<频率>|settle=<状态>
 ```
 
----
+后面可追加 motion、grasp、type、suggest 等字段；拒绝或查询结果可临时覆盖整条状态。
+`gesture_result` 包括 `IDLE`、`EXECUTING: <name>`、`DONE: <name>`、`POSES:a,b` 等文本。
+停止确认和 `DONE` 的软件状态都不能代替设备物理停稳检查。
 
-## joint_state_bridge
+## 命令文本与进度控制
 
-将手部硬件 O20/O6/L25 格式反馈转为 URDF 弧度，供 `robot_state_publisher` 驱动 RViz 模型；L20 按 L25 档案处理。
+以下指令发往公开的 `/{side}_hand/gesture_cmd`。手型支持范围以 [README](../../README.md)
+和 `hand_profile` 为准；规范原语名见[原语使用说明](primitives.md)。
 
-### 订阅 Topic
+| 指令 | 作用 |
+| --- | --- |
+| `open`、`fist`、`pinch` 等 | 执行当前手型支持的注册原语 |
+| `stop` | 停止当前动作并保持目标 |
+| `mode primitive` / `mode teach` / `mode stream` | 切换控制模式；teach/stream 模式拒绝普通原语执行 |
+| `pose my_grip` | 回放当前手型、当前侧保存的自定义手势 |
+| `pose my_grip grasp 0.35` | 对指定关键帧段设置进度；只给帧名时进入 0% hold |
+| `pose_list` | 查询当前姿态库，结果为 `POSES:...` |
+| `tripod prep` / `tripod close` | 执行支持分阶段命令的原语相位 |
+| `tripod prep 0.3` / `large_wrap close 0.5` | 对支持的定位相位设置进度 |
+| `target screwdriver` / `target_id 3` | 设置目标筛选；`target_id 0` 清除 ID 筛选 |
+| `auto` / `auto screwdriver` | 按当前目标 grasp_type 与手型配置选择原语 |
 
-| Topic | 消息类型 | 说明 |
-|-------|---------|------|
-| `/cb_{side}_hand_state` | `sensor_msgs/JointState` | 硬件关节反馈 |
+`named_pose` 是注册模板名；ROS 文本入口使用 `pose <name>`，不能用工作台菜单 ID
+`named_pose:<name>` 代替。`PlanGesture` 请求接受的姿态别名也不等同于命令文本。
 
-### 发布 Topic
-
-| Topic | 消息类型 | 说明 |
-|-------|---------|------|
-| `/joint_states` | `sensor_msgs/JointState` | URDF 弧度关节状态 |
-
-### 参数
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `hand_side` | string | `"left"` | 手侧 |
-| `hand_joint` | string | `"L25"` | 手型标识：`O20` / `O6` / `L25` / `L20` |
-| `urdf_path` | string | `""` | URDF 路径（空=自动搜索） |
-
----
-
-## 指令协议
-
-通过 `/hand_gesture_cmd`（或 `cmd_topic`）接收 `std_msgs/String`，格式：
-
-```
-<command> [args...]
-```
-
-### 指令列表
-
-| 指令 | 格式 | 说明 |
-|------|------|------|
-| `<原语名>` | `pinch` / `open` / `fist` / `tripod_by_vision` ... | 执行对应原语（全局注册 35 个，按当前手型 allowlist 过滤） |
-| `<原语名> <label>` | `index_ring_by_vision screwdriver` | 执行原语 + 设置目标 label 过滤 |
-| `<原语名> prep` | `thumb_adduction_grip prep` | 仅执行预备阶段（侧向夹持原语） |
-| `<原语名> close` | `thumb_adduction_grip close` | 执行闭合阶段 |
-| `auto` | `auto` / `auto [label]` / `auto [label] prep` | 根据感知 grasp_type 自动选择原语 |
-| `target <label>` | `target screwdriver` | 设置目标物体 label 过滤（不执行） |
-| `target_id <id>` | `target_id 3` | 按 instance_id 过滤（0=清除） |
-| `stop` | `stop` | 停止当前原语，保持最终姿态 |
-
-### 可用原语名（全局 35 个）
-
-| 类别 | 数量 | 指令 |
-|------|-----:|------|
-| 安全/固定 | 9 | `init` `open` `release` `relax_grip` `fist` `pinch` `point` `ok_sign` `v_sign` |
-| 非视觉抓取 | 8 | `thumb_adduction_grip` `index_middle_adduction_grip` `tripod` `ring` `middle_ring` `index_pinch` `middle_pinch` `parallel_extension` |
-| 视觉抓取 | 13 | `index_ring_by_vision` `large_wrap_by_vision` `middle_ring_by_vision` `ring_by_vision` `small_warp_by_vision` `no_index_warp_by_vision` `hook_by_vision` `index_pinch_by_vision` `middle_pinch_by_vision` `tripod_by_vision` `palmar_by_vision` `parallel_extension_by_vision` `disk_by_vision` |
-| L25/L20 动态操作 | 5 | `index_flick` `index_middle_flick` `twist2digit` `twist3digit` `twist5digit` |
-
-手型 allowlist 统计：
-
-| 手型 | 支持数 | 差异 |
-|------|------:|------|
-| O6 | 28 | 不支持 `index_middle_adduction_grip`、`parallel_extension` 和 5 个 L25/L20 动态原语；其中 16 个原语会记录能力警告并以 MCP 近似姿态执行 |
-| O20 | 30 | 不支持 5 个 L25/L20 动态原语 |
-| L25 | 35 | 支持全部注册原语 |
-| L20 | 35 | `l25` 兼容别名，复用 L25 档案 |
-
-O6 的能力警告不会拒绝执行；`gesture_node` 记录 `capability_warning` 后继续。`auto`、`stop`、`target`、`target_id` 是控制命令，`prep`/`close` 是执行阶段，均不计入上述 35 个原语。逐原语支持矩阵见 [primitives.md](primitives.md)。
-
-### 状态反馈格式
-
-`/hand_gesture_status` 发布格式（`|` 分隔）：
-
-```
-<active_primitive>|grasp=<grasp_state>
-<active_primitive>|type=<grasp_type>|suggest=<suggested_primitive>
-rejected:<reason>
-```
-
-示例：
-```
-index_ring_by_vision|grasp=progressive
-hold|type=precision|suggest=index_ring_by_vision
-rejected:too_far:0.312m>(max:0.150m)
-```
-
-`/hand_gesture/result` 发布格式：
-
-```
-IDLE                              # 无活跃原语
-EXECUTING: <name>                 # 正在执行
-EXECUTING: <name>, obj=<label>    # 执行中，有目标物体
-DONE: <name>                      # 原语完成
-```
-
----
-
-## 消息格式详解
-
-### JointState 控制指令
-
-发布到 `/cb_{side}_hand_control_cmd`。以下为 O20 的 20-DOF 示例：
-
-```yaml
-header:
-  stamp: <当前时间>
-name: [thumb_base, index_base, middle_base, ring_base, pinky_base,
-       thumb_abd, index_abd, middle_abd, ring_abd, pinky_abd,
-       thumb_rot, reserved_11, reserved_12, reserved_13, reserved_14,
-       thumb_tip, index_tip, middle_tip, ring_tip, pinky_tip]
-position: [0.0 ~ 255.0] × 20    # O20: 0=伸直, 255=弯曲
-velocity: [0.0] × 20
-effort: [0.0] × 20
-```
-
-实际数组长度和 `name` 顺序由手型配置决定：O6 为 6、O20 为 20、L25/L20 为 25；L25/L20 的基础弯曲和拇指关节方向与 O20 相反（255=伸直，0=弯曲）。
-
-### hand_info JSON 格式
-
-订阅 `/cb_{side}_hand_info`（驱动端发布）：
-
-```json
-{
-  "current_current": [120, 85, 92, 78, 65, 150, 0, 0, 0, 0, 200, 0, 0, 0, 0, 95, 88, 72, 60, 55],
-  "temperature": [35, 34, 36, ...]
-}
-```
-
-`current_current` 数组长度 = num_joints，单位 mA。
-
-### Float32MultiArray 指尖位置
-
-发布到 `/cb_{side}_hand_fingertip_positions`：
-
-```yaml
-layout:
-  dim:
-    - label: "finger"
-      size: 5
-      stride: 15
-    - label: "xyz"
-      size: 3
-      stride: 3
-data: [x0, y0, z0, x1, y1, z1, ..., x4, y4, z4]  # 15 floats
-# 顺序: thumb, index, middle, ring, pinky
-# 坐标系: hand_base_link, 单位: 米
-```
-
-### matrix_touch_mass JSON 格式
-
-订阅 `/cb_{side}_hand_matrix_touch_mass`：
-
-```json
-{
-  "thumb_mass": 12.5,
-  "index_mass": 8.3,
-  "middle_mass": 0.0,
-  "ring_mass": 0.0,
-  "little_mass": 0.0
-}
-```
-
-单位：克 (g)。作为触觉信号的 fallback 来源（仅在 `hand_force` 无数据时使用）。
-
----
-
-## Launch 使用
-
-### 基础启动
+示例要求原语节点和驱动已按安装指南就绪；每次选择一条操作：
 
 ```bash
-ros2 launch hand_gesture_primitives gesture_node.launch.py \
-  hand_side:=left hand_type:=o20
+ros2 run hand_gesture_primitives pub_gesture_cmd -- right open
+ros2 run hand_gesture_primitives pub_gesture_cmd -- right stop
+ros2 run hand_gesture_primitives pub_gesture_cmd -- right "pose my_grip"
+ros2 run hand_gesture_primitives pub_gesture_cmd -- right pose_list
 ```
 
-### 启用门控
+进度输入只更新已建立的段，不自动开启新动作。内置命令级 progress 仅支持 `tripod`
+和 `large_wrap` 的 `prep` / `close`；`auto/full` 以及力控相位不能用百分比替代反馈闭环。
+自定义关键帧的同段连续更新不重新取起点，换段会重新建立预览，详见[网页说明](../../docs/teach-panel-user-guide.md)。
+
+### STREAM 的量纲与排列
+
+STREAM 只在 `mode stream` 下接收 `JointState.position`；按配置读取所需数量的前 N 项，
+不能仅靠修改 `JointState.name` 重新排列目标。
+
+- `ros2_control_command_units=radians` 且转换器有效：使用**实际控制器顺序的弧度**，
+  N 等于转换器关节数。例如 L25 通常为 16 个主动关节，不能发送 25 项硬件值冒充弧度。
+- `hardware` 模式：使用产品 DOF 顺序的 0–255 值；`legacy_cb` 要求此模式。
+- `stream_watchdog_sec` 超时后保持当前目标；退出 STREAM 不会自动恢复旧动作。
+
+## 姿态库与迁移
+
+必须设置 `HAND_GESTURE_POSE_DIR`；文件按规范手型与侧别存储，例如 `o6_right.json`。
+新姿态使用 `semantic_v3`、30 维 S30 和 `unit=rad`；文件 schema 与传输 bundle 的版本分别管理。
+旧 hardware、semantic_o20、legacy255 数据保留读取兼容。详细量纲见[工作台数据约定](../../docs/workbench.md#数据与公共接口)。
+
+传输包的 `kind` 是 `hand_gesture_pose_bundle`，当前 **`schema_version=2`**；兼容读取
+v1 hardware/legacy255。导出的 v2 包保存每个条目的 `space`、`unit`、关键帧和说明，
+不意味着每条旧数据都会自动变成新格式。checksum 校验条目内容；导入策略为 `skip`、`overwrite`、`rename`。
+
+以下 CLI 只处理姿态数据，不发送动作：
 
 ```bash
-ros2 launch hand_gesture_primitives gesture_node.launch.py \
-  hand_side:=left launch_gate:=true
+export HAND_GESTURE_POSE_DIR="$HOME/hand-gesture-data/poses"
+ros2 run hand_gesture_primitives pose_bundle_export -- \
+  --hand-type o6 --hand-side right --output /tmp/right_o6.pose_bundle.json
+ros2 run hand_gesture_primitives pose_bundle_import -- \
+  --input /tmp/right_o6.pose_bundle.json --strategy skip --hand-type o6 --hand-side right
 ```
 
-### 带 Mock 感知测试
+目标机器应先设置自己的持久化目录。旧目录迁移可使用
+`pose_bundle_import --from-dir /path/to/old/poses --default-side right`，不会自动扫描用户目录。
 
-```bash
-ros2 launch hand_gesture_primitives test_with_mock.launch.py \
-  hand_side:=left shape:=cylinder
-```
+### ROS 服务
 
-### RViz 手模型可视化
+可选的 `pose_library_server` 提供以下服务，类型均属于 `hand_gesture_primitives_msgs/srv`：
+
+| `/{side}_hand/` 下的服务名 | 类型 |
+| --- | --- |
+| `save_pose` | `SavePose` |
+| `list_poses` | `ListPoses` |
+| `delete_pose` | `DeletePose` |
+| `import_gui_presets` | `ImportGuiPresets` |
+| `export_pose_bundle` | `ExportPoseBundle` |
+| `import_pose_bundle` | `ImportPoseBundle` |
+| `export_primitive_poses` | `ExportPrimitivePoses` |
+
+`SavePose.positions` 为空时取最近反馈；非空 `keyframe` 用于新增/替换指定帧。
+准确请求字段见仓库 [srv 定义](../../messages/hand_gesture_primitives_msgs/srv)。
+网页直接访问共享姿态库，不要求启动该独立服务。
+
+`gesture_node` 提供 `/{side}_hand/plan_gesture`（`PlanGesture`），只生成名义轨迹，不发送控制命令。
+请求包含 `primitive` 和 `sample_period`；可规划的静态原语由 `PLANABLE_STATIC_PRIMITIVES` 决定。
+自定义姿态请求接受 `pose <name>`、`pose:<name>`、`pose/<name>` 或 `named_pose:<name>`；
+响应包含控制器关节名、采样时间、展平的位置数组和可选 `segments_json`。视觉/力控闭环不属于名义规划。
+
+## 网页面板与 HTTP
+
+独立 Mock 使用 `teach_panel --mock`；ROS 模式使用安装指南里的节点与 URDF 配置。
+直接启动 ROS 面板默认 `http_port=8001`，不因右手自动变为 8002；多实例需显式设置不同端口。
+`teach_panel.launch.py` 默认 `launch_gesture_node=false`、`launch_pose_server=true`，仅需网页时
+可设 `launch_pose_server:=false`。面板必须和原语使用同一姿态目录与手型/侧别配置。
+
+| 入口 | 用途 |
+| --- | --- |
+| `/`、`/legacy`、`/workbench` | 默认示教页、兼容入口、扩展工作台 |
+| `/ws?side=right` | 默认页的 WebSocket 交互 |
+| `GET /api/workbench/state` | 后端、默认侧、双手状态、速度及编辑暂停状态 |
+| `GET /api/workbench/catalog?side=right` | 原语支持与可用条件 |
+| `GET /api/workbench/library?side=right` | 当前侧姿态库 |
+| `GET /api/pose_bundle/export?side=right` | 导出所选侧的整个已保存库 |
+| `POST /api/pose_bundle/import` | 姿态包导入，支持 side、strategy、verify_checksum 查询参数 |
+| `POST /api/pose_bundle/import_factory` | 静态终态预设，支持 side、overwrite 查询参数 |
+
+默认页的滑条按产品布局显示 0–255，并可切换显示单位；工作台 `PoseDraft.positions`
+使用控制器弧度。因此不能把两种页面的数值数组直接互换。
+
+## GraspGate
+
+`launch_gate:=true` 时，用户命令仍发到 `gesture_cmd`，gate 转发到 `gesture_cmd_exec`。
+目录中 11 个 `gated` 视觉原语执行 H/XY/Fwd 条件检查；`index_ring_by_vision` 和
+`large_wrap_by_vision` 为目录明确的直通例外。直通不代表不需要感知或反馈。
+
+| 参数 | 默认值 | 用途 |
+| --- | --- | --- |
+| `palm_z` / `tip_z` | `0.06` / `0.18` m | 手在 TCP 前方的可达范围 |
+| `half_w` / `half_h` | `0.20` / `0.15` m | 掌面半宽与半高 |
+| `height_tol` | `0.05` m | 高度容差 |
+| `data_timeout` | `2.0` s | 输入新鲜度 |
+| `de_bounce` | `3` | 连续通过检查次数 |
+
+H 检查物体与手的世界 Z 范围相交；XY 检查目标在掌面范围；Fwd 要求手坐标系 z>0。
+数据还必须采用一致坐标系。需要门控的原语名单由 `primitive_catalog.gated_primitive_names()` 给出。
+
+## joint_state_bridge 与模型显示
+
+此节点输出 mesh 模型关节状态，**默认输出 `/mesh_joint_states`**，不能当成驱动反馈源。
+
+| 参数 | 默认值 | 用途 |
+| --- | --- | --- |
+| `hand_side` | `left` | 侧别 |
+| `hand_joint` | `L25` | 模型与手型 |
+| `state_source` | `auto` | 当前六种配置手型默认读取 ros2_control 的关节反馈 |
+| `state_topic` | 空 | joint_states 模式为 `/joint_states`，legacy_cb 模式为 `/cb_{side}_hand_state` |
+| `output_topic` | `/mesh_joint_states` | 可视化关节状态 |
+| `robot_description` | 空 | 控制器 URDF，供弧度反馈映射 |
+| `urdf_path` | 空 | FK/可视化几何模型路径 |
+
+所需几何模型见[模型说明](../../data/urdf/README.md)。查看随包 O6 右手模型的示例：
 
 ```bash
 ros2 launch hand_gesture_primitives view_hand_urdf.launch.py \
-  hand_side:=left hand_joint:=L25
+  mode:=gui hand_model:=O6 hand_joint:=O6 hand_side:=right
 ```
 
----
-
-## 典型集成拓扑
-
-### 最小配置（无感知）
-
-```
-LinkerHand 驱动
-  ├── /cb_left_hand_state ──────────────▶ hand_gesture_node
-  ◀── /cb_left_hand_control_cmd ────────┘
-```
-
-无需感知输入的安全、固定、非视觉抓取和 L25/L20 动态原语可以直接执行；视觉原语缺少 bbox/TCP/object_pose 时无法完成对应的自适应或定位流程。默认 `reach_check_strict=false`，无目标位姿只记录可达性警告；严格模式会拒绝非安全原语。
-
-### 标准配置（感知 + 门控）
-
-```
-robot_perception                    机械臂驱动
-  ├── bboxes_3d ──▶ grasp_gate ◀── /tcp_pose
-  │                     │
-  │                     ├── /object_pose (world)
-  │                     └── /hand_gesture_cmd_exec
-  │              hand_gesture_node
-  │                     │
-  │                     ▼
-  │              LinkerHand 驱动
-  │
-  └── bboxes_3d ──▶ hand_gesture_node (object_size / grasp_type)
-```
-
-可使用当前手型 allowlist 中的全部原语，包括自适应闭合、力控包络和 `auto` 映射：O6 为 28 个、O20 为 30 个、L25/L20 为 35 个。
-
-### 最小感知配置（无门控）
-
-```bash
-# 无门控时，cmd_topic 直接订阅用户 topic
-ros2 launch hand_gesture_primitives gesture_node.launch.py \
-  hand_side:=left cmd_topic:=/hand_gesture_cmd
-```
-
-跳过门控，所有指令直达 gesture_node。包络原语不经可行性过滤。
-
----
-
-## 保护机制
-
-| 机制 | 触发条件 | 行为 |
-|------|---------|------|
-| 电流过载保护 | 任一关节电流 > `overload_current_threshold` 持续 > `overload_duration_sec` | 自动执行 `init`（全手复位） |
-| 可达性检查 | TCP→目标距离 > `reach_max_distance` | 严格模式拒绝 / 非严格模式警告 |
-| infeasible 保持 | 原语返回 `feasible=false` | 保持上帧目标继续 10Hz 发送 |
-| 感知超时 | bbox 连续 15 帧无更新 (~3s) | 清除物体缓存（不影响当前原语执行） |
-| 门控去抖 | 连续 `de_bounce` 帧三条件通过 | 才转发指令（防抖动，仅 11 个门控原语） |
-
----
-
-## 与 LinkerHand 驱动的对接
-
-本包依赖 LinkerHand ROS2 SDK 提供的以下 Topic：
-
-| 驱动 Topic | 方向 | 说明 |
-|-----------|------|------|
-| `/cb_{side}_hand_control_cmd` | 本包 → 驱动 | 6/20/25-DOF 目标角度 |
-| `/cb_{side}_hand_state` | 驱动 → 本包 | 关节角度反馈 |
-| `/cb_{side}_hand_info` | 驱动 → 本包 | 电流/温度 JSON |
-| `/cb_{side}_hand_force` | 驱动 → 本包 | 触觉压感 |
-| `/cb_{side}_hand_normal_force` | 驱动 → 本包 | 法向力 |
-| `/cb_{side}_hand_matrix_touch_mass` | 驱动 → 本包 | 矩阵压感合值 |
-| `/cb_{side}_hand_motor_torque` | 驱动 → 本包 | 关节力矩 |
-
-兼容 LinkerHand O6、O20 和 L25 驱动，通过 `hand_type` 参数自动适配关节数量与角度方向；L20 作为 L25 的同协议兼容别名运行。
+此示例启动可视化滑条与模型，不启动机械手驱动。其他手型需要另外提供对应 URDF 和 mesh。

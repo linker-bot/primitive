@@ -17,17 +17,36 @@ from typing import List, Optional
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from ..primitive_base import (
-    HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
-    lerp_angles, ABD_NEUTRAL, HAND_CONFIGS, HandConfig,
-)
+from ..angle_bridge import AngleUnits
+from ..contact_config import scale_per_tick_delta, scaled_hold_retreat_step
+from ..contact_resolver import current_index_for_s30
 from ..gesture_engine import (
-    PhasedLerpEngine, SequentialForceCloseEngine,
-    make_hook_by_vision_engine, make_hook_by_vision_sfce_engine,
+    PhasedLerpEngine,
+    SequentialForceCloseEngine,
+    make_hook_by_vision_engine,
+    make_hook_by_vision_sfce_engine,
 )
 from ..gesture_params import load_hook_by_vision_params
+from ..hand_config import HandConfig as HardwareHandConfig
+from ..primitive_base import (
+    ABD_NEUTRAL,
+    SEMANTIC_DIM,
+    HandConfig,
+    HandGesturePrimitive,
+    PrimitiveContext,
+    PrimitiveResult,
+    apply_four_finger_pip,
+    digit_flex_close_step,
+    flex_chain_indices,
+    lerp_angles,
+    semantic_pose_config,
+    set_joint,
+)
 
 _logger = logging.getLogger(__name__)
+
+_CLOSE_DIGITS = ("index", "middle", "ring", "pinky")
+_CLOSE_DIGIT_LABELS = ("食指", "中指", "无名指", "小指")
 
 REACH_THRESHOLD = 0.15
 PALM_FORWARD_MIN = 0.02
@@ -48,14 +67,6 @@ _PRESHAPE = {
 # --- 力控闭合参数 ---
 FINGER_STEP = 8
 PRESHAPE_DURATION = 0.5
-
-def _build_finger_joints(cfg):
-    return [
-        (cfg.index_base, cfg.index_tip),
-        (cfg.middle_base, cfg.middle_tip),
-        (cfg.ring_base, cfg.ring_tip),
-        (cfg.pinky_base, cfg.pinky_tip),
-    ]
 
 
 class _Phase(Enum):
@@ -84,6 +95,7 @@ class HookByVision(HandGesturePrimitive):
         self._settle_count = 0
         self._finger_stopped: List[bool] = [False, False, False, False]
         self._cfg: Optional[HandConfig] = None
+        self._grasp_state: str = "approaching"
 
     @property
     def name(self) -> str:
@@ -95,11 +107,13 @@ class HookByVision(HandGesturePrimitive):
             return self._engine.grasp_state
         if self._sfce_engine is not None:
             return self._sfce_engine.grasp_state
-        return "approaching"
+        return self._grasp_state
 
     def _ensure_engine(self, ctx: PrimitiveContext) -> PhasedLerpEngine:
         if self._engine is None or self._engine_hand_type != ctx.hand_type:
-            self._engine = make_hook_by_vision_engine(ctx.hand_type)
+            self._engine = make_hook_by_vision_engine(
+                ctx.hand_type, radian_converter=ctx.radian_converter
+            )
             if self._engine is None:
                 raise RuntimeError(f"hook_by_vision config engine missing for {ctx.hand_type}")
             self._engine.reset(self._start_angles)
@@ -108,7 +122,9 @@ class HookByVision(HandGesturePrimitive):
 
     def _ensure_sfce_engine(self, ctx: PrimitiveContext) -> Optional[SequentialForceCloseEngine]:
         if self._sfce_engine is None or self._engine_hand_type != ctx.hand_type:
-            self._sfce_engine = make_hook_by_vision_sfce_engine(ctx.hand_type)
+            self._sfce_engine = make_hook_by_vision_sfce_engine(
+                ctx.hand_type, radian_converter=ctx.radian_converter
+            )
             if self._sfce_engine is not None:
                 self._sfce_engine.reset(self._start_angles)
                 self._engine_hand_type = ctx.hand_type
@@ -124,31 +140,33 @@ class HookByVision(HandGesturePrimitive):
         self._settle_count = 0
         self._finger_stopped = [False, False, False, False]
         self._cfg = None
+        self._hw_cfg = None
+        self._grasp_state = "approaching"
 
     def _get_cfg(self, ctx: PrimitiveContext) -> HandConfig:
         if self._cfg is None:
-            self._cfg = HAND_CONFIGS[ctx.hand_type]
+            self._cfg = semantic_pose_config(ctx.hand_type)
+            self._hw_cfg = HardwareHandConfig(ctx.hand_type)
         return self._cfg
 
     def _build_preshape_target(self, cfg: HandConfig) -> List[float]:
-        angles = [0.0] * cfg.num_joints
+        angles = [0.0] * SEMANTIC_DIM
         # 拇指保持伸直，不参与抓取
         angles[cfg.thumb_base] = 0
         angles[cfg.thumb_abd] = ABD_NEUTRAL
-        angles[cfg.thumb_rot] = 0
-        angles[cfg.thumb_tip] = 0
+        set_joint(angles, cfg.thumb_rot, 0)
+        set_joint(angles, cfg.thumb_tip, 0)
         # 四指预成型弯曲
         angles[cfg.index_base] = _PRESHAPE["index_base"]
-        angles[cfg.index_tip] = _PRESHAPE["index_tip"]
+        set_joint(angles, cfg.index_tip, _PRESHAPE["index_tip"])
         angles[cfg.middle_base] = _PRESHAPE["middle_base"]
-        angles[cfg.middle_tip] = _PRESHAPE["middle_tip"]
+        set_joint(angles, cfg.middle_tip, _PRESHAPE["middle_tip"])
         angles[cfg.ring_base] = _PRESHAPE["ring_base"]
-        angles[cfg.ring_tip] = _PRESHAPE["ring_tip"]
+        set_joint(angles, cfg.ring_tip, _PRESHAPE["ring_tip"])
         angles[cfg.pinky_base] = _PRESHAPE["pinky_base"]
-        angles[cfg.pinky_tip] = _PRESHAPE["pinky_tip"]
+        set_joint(angles, cfg.pinky_tip, _PRESHAPE["pinky_tip"])
         # L25 root2
-        if cfg.middle_root2 >= 0:
-            angles[cfg.middle_root2] = 60
+        apply_four_finger_pip(angles, cfg, 60)
         # 侧摆归中（收拢手指使钩更紧凑）
         for idx in cfg.abd_indices:
             if idx != cfg.thumb_abd:
@@ -158,18 +176,19 @@ class HookByVision(HandGesturePrimitive):
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
+        u = AngleUnits(ctx)
+        finger_step = scale_per_tick_delta(FINGER_STEP, ctx.motion_control_rate)
         if load_hook_by_vision_params(ctx.hand_type) is not None:
             engine = self._ensure_engine(ctx)
             raw = engine.compute(current_angles, elapsed, ctx)
-            return self._move(raw)
+            return self._move(raw, space=u.space)
 
         sfce = self._ensure_sfce_engine(ctx)
         if sfce is not None:
             raw = sfce.compute(elapsed, ctx)
-            return self._move(raw)
+            return self._move(raw, space=u.space)
 
         cfg = self._get_cfg(ctx)
-        finger_joints = _build_finger_joints(cfg)
 
         if ctx.tcp_pose is None:
             return self._hold("缺少 tcp_pose")
@@ -193,15 +212,16 @@ class HookByVision(HandGesturePrimitive):
 
         # === Phase 1: 预成型 ===
         if self._phase == _Phase.PRESHAPE:
-            target = self._build_preshape_target(cfg)
+            # fallback 常量为 legacy 255，须经 u.pose 转到与 start_angles 同空间再 lerp
+            target = u.pose(self._build_preshape_target(cfg))
             t = elapsed / PRESHAPE_DURATION
             if t >= 1.0:
                 self._phase = _Phase.CLOSE
                 self._close_angles = list(target)
                 self._baseline_currents = list(ctx.joint_currents)
                 _logger.warning("hook: 进入钩握闭合阶段")
-                return self._move(list(target))
-            return self._move(lerp_angles(self._start_angles, target, t))
+                return self._move(list(target), space=u.space)
+            return self._move(lerp_angles(self._start_angles, target, t), space=u.space)
 
         # === Phase 2: 力控闭合 ===
         if self._phase == _Phase.CLOSE:
@@ -211,56 +231,58 @@ class HookByVision(HandGesturePrimitive):
                 self._settle_count += 1
                 if self._settle_count == ctx.contact_thresholds.current_settle_frames:
                     self._baseline_currents = list(currents)
-                return self._move(list(self._close_angles))
+                return self._move(list(self._close_angles), space=u.space)
 
             base = self._baseline_currents
 
             # 四指各自独立力控
-            for i, (base_idx, tip_idx) in enumerate(finger_joints):
+            for i, digit in enumerate(_CLOSE_DIGITS):
                 if self._finger_stopped[i]:
                     continue
-                base_delta = currents[base_idx] - base[base_idx]
-                tip_delta = currents[tip_idx] - base[tip_idx]
-                if base_delta > ctx.contact_thresholds.current_delta_narrow or tip_delta > ctx.contact_thresholds.current_delta_narrow:
+                status = digit_flex_close_step(
+                    self._close_angles,
+                    cfg,
+                    digit,
+                    currents,
+                    base,
+                    self._hw_cfg,
+                    ctx.contact_thresholds.current_delta_narrow,
+                    u.step(getattr(cfg, f"{digit}_base"), finger_step),
+                    u.close_max(getattr(cfg, f"{digit}_base")),
+                )
+                if status != "continue":
                     self._finger_stopped[i] = True
-                    finger_names = ["食指", "中指", "无名指", "小指"]
-                    _logger.warning("hook: %s接触!", finger_names[i])
-                else:
-                    if self._close_angles[base_idx] < 255:
-                        self._close_angles[base_idx] = min(
-                            self._close_angles[base_idx] + FINGER_STEP, 255)
-                    else:
-                        self._finger_stopped[i] = True
-                    if self._close_angles[tip_idx] < 255:
-                        self._close_angles[tip_idx] = min(
-                            self._close_angles[tip_idx] + FINGER_STEP, 255)
-
-            # L25: 中指 root2 同步
-            if cfg.middle_root2 >= 0 and not self._finger_stopped[1]:
-                if self._close_angles[cfg.middle_root2] < 255:
-                    self._close_angles[cfg.middle_root2] = min(
-                        self._close_angles[cfg.middle_root2] + FINGER_STEP, 255)
+                    if status == "contact":
+                        _logger.warning("hook: %s接触!", _CLOSE_DIGIT_LABELS[i])
 
             # 所有手指都停 → HOLD
             if all(self._finger_stopped):
                 _logger.warning("hook: 四指钩握完成 → HOLD")
                 self._phase = _Phase.HOLD
+                self._grasp_state = "contact"
+            else:
+                self._grasp_state = "closing"
 
-            return self._move(list(self._close_angles))
+            return self._move(list(self._close_angles), space=u.space)
 
         # === Phase 3: 保持 ===
+        self._grasp_state = "contact"
         currents = ctx.joint_currents
-        monitored = []
-        for base_idx, tip_idx in finger_joints:
-            monitored.extend([base_idx, tip_idx])
-        if cfg.middle_root2 >= 0:
-            monitored.append(cfg.middle_root2)
+        monitored: List[int] = []
+        for digit in _CLOSE_DIGITS:
+            monitored.extend(flex_chain_indices(cfg, digit))
         for idx in monitored:
-            if currents[idx] > ctx.contact_thresholds.hold_safe_current and self._close_angles[idx] > 0:
-                over = currents[idx] - ctx.contact_thresholds.hold_safe_current
-                step = max(1, int(over / 30))
-                self._close_angles[idx] = max(0, self._close_angles[idx] - step)
-        return self._move(list(self._close_angles))
+            hi = current_index_for_s30(self._hw_cfg, idx)
+            if hi is None or hi < 0 or hi >= len(currents):
+                continue
+            if (
+                currents[hi] > ctx.contact_thresholds.hold_safe_current
+                and self._close_angles[idx] > 0
+            ):
+                over = currents[hi] - ctx.contact_thresholds.hold_safe_current
+                step = u.step(idx, scaled_hold_retreat_step(over, ctx.control_rate))
+                self._close_angles[idx] = max(u.value(idx, 0), self._close_angles[idx] - step)
+        return self._move(list(self._close_angles), space=u.space)
 
     @property
     def done(self) -> bool:

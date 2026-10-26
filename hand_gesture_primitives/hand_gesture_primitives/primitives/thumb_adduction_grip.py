@@ -7,6 +7,7 @@ engine 字段控制行为:
 
 from typing import List, Optional
 
+from ..angle_bridge import AngleUnits
 from ..gesture_engine import (
     PhasedLerpEngine,
     RotProgressiveEngine,
@@ -17,17 +18,22 @@ from ..gesture_params import (
     CANONICAL_SEMANTIC_HAND,
     ThumbAdductionParams,
     load_thumb_adduction_params,
+    load_thumb_adduction_params_for_ctx,
 )
 from ..primitive_base import (
-    HandGesturePrimitive, PrimitiveContext, PrimitiveResult, parse_grasp_phase,
+    HandGesturePrimitive,
+    PrimitiveContext,
+    PrimitiveResult,
+    parse_grasp_phase,
 )
+from ..semantic_30 import SEMANTIC_30_IDX
 
 # 向后兼容：canonical semantic_o20 默认常量（与 gestures 缺省 / o20.yaml 一致）
 _ref_gesture_params = load_thumb_adduction_params(CANONICAL_SEMANTIC_HAND)
-THUMB_ABD_PREP = int(_ref_gesture_params.prep_angles[5])
-THUMB_ROT = int(_ref_gesture_params.prep_angles[10])
-THUMB_BASE = int(_ref_gesture_params.close_angles[0])
-THUMB_TIP = int(_ref_gesture_params.close_angles[15])
+THUMB_ABD_PREP = float(_ref_gesture_params.prep_angles[SEMANTIC_30_IDX["thumb_mcp_abd"]])
+THUMB_ROT = float(_ref_gesture_params.prep_angles[_ref_gesture_params.thumb_rot_joint])
+THUMB_BASE = float(_ref_gesture_params.close_angles[SEMANTIC_30_IDX["thumb_mcp_flex"]])
+THUMB_TIP = float(_ref_gesture_params.close_angles[SEMANTIC_30_IDX["thumb_dip"]])
 THUMB_ADDUCTION_ANGLES = list(_ref_gesture_params.prep_angles)
 THUMB_ALL_INDICES = list(_ref_gesture_params.thumb_hold_joints)
 THUMB_ROT_INDEX = _ref_gesture_params.thumb_rot_joint
@@ -45,7 +51,7 @@ PROGRESSIVE_CLOSE_RATE = _ref_gesture_params.progressive_rate
 
 
 def _params(ctx: PrimitiveContext) -> ThumbAdductionParams:
-    return load_thumb_adduction_params(ctx.hand_type)
+    return load_thumb_adduction_params_for_ctx(ctx)
 
 
 def _default_angles(ctx: PrimitiveContext) -> List[float]:
@@ -97,6 +103,7 @@ class ThumbAdductionGrip(HandGesturePrimitive):
         self._engine_new: Optional[RotProgressiveEngine] = None
         self._engine_hand_type: str = ""
         self._use_new_engine: bool = False
+        self._result_space = "semantic_rad"
 
     @property
     def phase(self) -> str:
@@ -124,31 +131,51 @@ class ThumbAdductionGrip(HandGesturePrimitive):
             self._engine_hand_type = ""
 
         p = _params(ctx)
-        self._use_new_engine = (p.engine == "rot_progressive")
+        self._use_new_engine = p.engine == "rot_progressive"
 
         if self._use_new_engine:
             if self._engine_new is None:
-                rot_joint = p.thumb_rot_joint if p.thumb_rot_joint >= 0 else 10
-                rot_target = p.progressive_abd_max if p.progressive_abd_max > 0 else 200.0
-                rot_rate = p.progressive_rate if p.progressive_rate > 0 else 10.0
-                contact_fingers = list(p.contact_fingers) if p.contact_fingers else None
+                p_eng = p
+                u = AngleUnits(ctx)
+                rot_joint = (
+                    p_eng.thumb_rot_joint
+                    if p_eng.thumb_rot_joint >= 0
+                    else SEMANTIC_30_IDX["thumb_rot"]
+                )
+                # progressive_* 已是 rad（有 Converter）或 legacy255
+                rot_target = (
+                    p_eng.progressive_abd_max
+                    if p_eng.progressive_abd_max > 0
+                    else u.value(rot_joint, 200.0)
+                )
+                rot_rate = (
+                    p_eng.progressive_rate
+                    if p_eng.progressive_rate > 0
+                    else u.step(rot_joint, 10.0)
+                )
+                contact_fingers = list(p_eng.contact_fingers) if p_eng.contact_fingers else None
                 self._engine_new = RotProgressiveEngine(
-                    pose_target=list(p.prep_angles),
+                    pose_target=list(p_eng.prep_angles),
                     rot_joint=rot_joint,
                     rot_target=rot_target,
                     rot_rate=rot_rate,
-                    pose_duration=p.phase1,
+                    pose_duration=p_eng.phase1,
                     phase=self._phase,
                     contact_fingers=contact_fingers,
+                    rot_arrive_eps=u.step(rot_joint, 1.0),
                 )
                 self._engine_new.reset(self._start_angles)
                 self._engine_hand_type = ctx.hand_type
+                self._result_space = u.space
             return self._engine_new
         else:
             if self._engine is None:
-                self._engine = make_phased_lerp_engine(ctx.hand_type, self._phase)
+                self._engine = make_phased_lerp_engine(
+                    ctx.hand_type, self._phase, radian_converter=ctx.radian_converter
+                )
                 self._engine.reset(self._start_angles)
                 self._engine_hand_type = ctx.hand_type
+                self._result_space = AngleUnits(ctx).space
             return self._engine
 
     def on_enter(self, current_angles: List[float]) -> None:
@@ -156,13 +183,14 @@ class ThumbAdductionGrip(HandGesturePrimitive):
         self._engine = None
         self._engine_new = None
         self._engine_hand_type = ""
+        self._result_space = "semantic_rad"
 
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
         engine = self._ensure_engine(ctx)
         raw = engine.compute(current_angles, elapsed, ctx)
-        return self._move(raw)
+        return self._move(raw, space=getattr(self, "_result_space", AngleUnits(ctx).space))
 
     @property
     def name(self) -> str:

@@ -9,25 +9,34 @@
 坐标系转换: 世界 → TCP → R_z(90°) → 手坐标系
   hand +X = -TCP_Y (掌面左右),  hand +Y = +TCP_X (掌面上下),  hand +Z = +TCP_Z (手指前方)
 
-包络原语 (11个) 需通过门控，其余原语直接放行。
+包络原语需通过门控，其余原语直接放行。
+门控集合以 ``primitive_catalog`` 的 ``gated=True`` 为单一真相源
+（当前 11 个；``index_ring_by_vision`` / ``large_wrap_by_vision`` 故意直通）。
 """
 
 import numpy as np
-from scipy.spatial.transform import Rotation
 
-import rclpy
-from rclpy.node import Node
-from std_msgs.msg import String
-from geometry_msgs.msg import PoseStamped, Point
-from .topic_defaults import bboxes_3d_topic, labeled_poses_topic
+from .primitive_catalog import gated_primitive_names
+from .topic_defaults import (
+    bboxes_3d_topic,
+    labeled_poses_topic,
+    resolve_side_topic,
+    side_hand_topics,
+)
 
-# ── 包络原语集合 (需通过三判定: H / XY / Fwd) ─────────────────
-GATED_PRIMITIVES = {
-    "ring_by_vision", "small_warp_by_vision", "no_index_warp_by_vision", 
-    "middle_ring_by_vision", "hook_by_vision", "tripod_by_vision", 
-    "palmar_by_vision", "parallel_extension_by_vision",
-    "index_pinch_by_vision", "middle_pinch_by_vision", "disk_by_vision",
-}
+try:
+    import rclpy
+    from geometry_msgs.msg import PoseStamped
+    from rclpy.node import Node
+    from std_msgs.msg import String
+except ImportError:  # pragma: no cover — 无 ROS 环境仍可 import 门控集合
+    rclpy = None  # type: ignore[assignment]
+    Node = object  # type: ignore[misc,assignment]
+    PoseStamped = object  # type: ignore[misc,assignment]
+    String = object  # type: ignore[misc,assignment]
+
+# ── 包络原语集合 (需通过三判定: H / XY / Fwd) — 派生自 catalog ──
+GATED_PRIMITIVES = set(gated_primitive_names())
 
 # ── 忽略的物体标签 ────────────────────────────────────────────
 IGNORE_LABELS = ["robotic hand", "hand", "arm", "robot", "claw"]
@@ -40,29 +49,51 @@ class GraspGate(Node):
         super().__init__("grasp_gate")
 
         # ── 参数 ──
-        self.declare_parameter("tcp_pose_topic", "/tcp_pose")
+        self.declare_parameter("hand_side", "left")
+        # Empty => auto /{side}_hand/... (dual-hand safe).
+        self.declare_parameter("tcp_pose_topic", "")
         self.declare_parameter("bbox_topic", bboxes_3d_topic())
         self.declare_parameter("labeled_pose_topic", labeled_poses_topic())
-        self.declare_parameter("input_cmd_topic", "/hand_gesture_cmd")
-        self.declare_parameter("output_cmd_topic", "/hand_gesture_cmd_exec")
-        self.declare_parameter("status_topic", "/grasp_gate/status")
-        self.declare_parameter("selected_pose_topic", "/object_pose")
+        self.declare_parameter("input_cmd_topic", "")
+        self.declare_parameter("output_cmd_topic", "")
+        self.declare_parameter("status_topic", "")
+        self.declare_parameter("selected_pose_topic", "")
+        self.declare_parameter("selected_label_topic", "")
         # 手几何
-        self.declare_parameter("palm_z", 0.06)       # TCP → 掌心 Z 偏移 (m)
-        self.declare_parameter("tip_z", 0.18)         # TCP → 指尖 Z 偏移 (m)
-        self.declare_parameter("half_w", 0.20)        # 掌面左右半宽 (m)
-        self.declare_parameter("half_h", 0.15)        # 掌面上下半高 (m)
-        self.declare_parameter("height_tol", 0.05)    # 高度 Z 容差 (m)
-        self.declare_parameter("data_timeout", 2.0)   # 数据过期 (s)
-        self.declare_parameter("de_bounce", 3)        # 去抖帧数
+        self.declare_parameter("palm_z", 0.06)  # TCP → 掌心 Z 偏移 (m)
+        self.declare_parameter("tip_z", 0.18)  # TCP → 指尖 Z 偏移 (m)
+        self.declare_parameter("half_w", 0.20)  # 掌面左右半宽 (m)
+        self.declare_parameter("half_h", 0.15)  # 掌面上下半高 (m)
+        self.declare_parameter("height_tol", 0.05)  # 高度 Z 容差 (m)
+        self.declare_parameter("data_timeout", 2.0)  # 数据过期 (s)
+        self.declare_parameter("de_bounce", 3)  # 去抖帧数
 
-        self._tcp_topic = self.get_parameter("tcp_pose_topic").value
+        hand_side = self.get_parameter("hand_side").value
+        if hand_side not in ("left", "right"):
+            self.get_logger().error(f"hand_side 参数无效: '{hand_side}'，必须为 left 或 right")
+            raise ValueError(f"Invalid hand_side: {hand_side}")
+        side_topics = side_hand_topics(hand_side)
+        self._side = hand_side
+        self._tcp_topic = resolve_side_topic(
+            self.get_parameter("tcp_pose_topic").value, side_topics["tcp_pose"]
+        )
         self._bbox_topic = self.get_parameter("bbox_topic").value
         self._labeled_topic = self.get_parameter("labeled_pose_topic").value
-        self._input_topic = self.get_parameter("input_cmd_topic").value
-        self._output_topic = self.get_parameter("output_cmd_topic").value
-        self._status_topic = self.get_parameter("status_topic").value
-        self._sel_pose_topic = self.get_parameter("selected_pose_topic").value
+        self._input_topic = resolve_side_topic(
+            self.get_parameter("input_cmd_topic").value, side_topics["gesture_cmd"]
+        )
+        self._output_topic = resolve_side_topic(
+            self.get_parameter("output_cmd_topic").value, side_topics["gesture_cmd_exec"]
+        )
+        self._status_topic = resolve_side_topic(
+            self.get_parameter("status_topic").value, side_topics["gate_status"]
+        )
+        self._sel_pose_topic = resolve_side_topic(
+            self.get_parameter("selected_pose_topic").value, side_topics["object_pose"]
+        )
+        self._sel_label_topic = resolve_side_topic(
+            self.get_parameter("selected_label_topic").value, side_topics["selected_label"]
+        )
         self._palm_z = self.get_parameter("palm_z").value
         self._tip_z = self.get_parameter("tip_z").value
         self._half_w = self.get_parameter("half_w").value
@@ -72,52 +103,58 @@ class GraspGate(Node):
         self._de_bounce = self.get_parameter("de_bounce").value
 
         # ── 状态 ──
-        self._tcp = None              # dict: pos(3,), quat(4,), stamp
-        self._bboxes = {}             # label -> {center, min, max, stamp}
-        self._poses = {}              # label -> {pos, stamp} (fallback)
-        self._last_label = None       # 上一帧选中的物体
-        self._ok_count = 0            # 连续 OK 帧数
+        self._tcp = None  # dict: pos(3,), quat(4,), stamp
+        self._bboxes = {}  # label -> {center, min, max, stamp}
+        self._poses = {}  # label -> {pos, stamp} (fallback)
+        self._last_label = None  # 上一帧选中的物体
+        self._ok_count = 0  # 连续 OK 帧数
 
         # ── 订阅 ──
-        self.create_subscription(
-            PoseStamped, self._tcp_topic, self._tcp_cb, 10)
+        self.create_subscription(PoseStamped, self._tcp_topic, self._tcp_cb, 10)
 
         # 首选: 3D bbox (有 min/max，H 判定精确)
         try:
             from robot_perception_msgs.msg import LabeledBBox3DArray
-            self.create_subscription(
-                LabeledBBox3DArray, self._bbox_topic, self._bbox_cb, 10)
+
+            self.create_subscription(LabeledBBox3DArray, self._bbox_topic, self._bbox_cb, 10)
             self.get_logger().info(f"已订阅 bbox_3d: {self._bbox_topic}")
         except ImportError:
-            self.get_logger().warn(
-                "robot_perception_msgs 未安装，仅使用 LabeledPose 输入")
+            self.get_logger().warn("robot_perception_msgs 未安装，仅使用 LabeledPose 输入")
 
         # 备选: LabeledPose (无 bbox，H 判定降级为点±容差)
         try:
             from robot_perception_msgs.msg import LabeledPoseArray
-            self.create_subscription(
-                LabeledPoseArray, self._labeled_topic, self._pose_cb, 10)
+
+            self.create_subscription(LabeledPoseArray, self._labeled_topic, self._pose_cb, 10)
             self.get_logger().info(f"已订阅 labeled_pose: {self._labeled_topic}")
         except ImportError:
             pass
 
         # 手势指令
-        self.create_subscription(
-            String, self._input_topic, self._cmd_cb, 10)
+        self.create_subscription(String, self._input_topic, self._cmd_cb, 10)
 
         # ── 发布 ──
         self._cmd_pub = self.create_publisher(String, self._output_topic, 10)
         self._status_pub = self.create_publisher(String, self._status_topic, 10)
-        self._pose_pub = self.create_publisher(
-            PoseStamped, self._sel_pose_topic, 10)
+        self._pose_pub = self.create_publisher(PoseStamped, self._sel_pose_topic, 10)
+        self._label_pub = self.create_publisher(String, self._sel_label_topic, 10)
+        from .workbench_gate import WorkbenchGate
+        self._workbench = WorkbenchGate(self)
 
         self.get_logger().info(
-            f"GraspGate 三判定: "
-            f"H(Z交叠) XY(±{self._half_w*100:.0f}x{self._half_h*100:.0f}cm) "
-            f"Fwd(cz>0) 去抖x{self._de_bounce}")
+            f"GraspGate side={self._side}: "
+            f"H(Z交叠) XY(±{self._half_w * 100:.0f}x{self._half_h * 100:.0f}cm) "
+            f"Fwd(cz>0) 去抖x{self._de_bounce}"
+        )
         self.get_logger().info(
             f"包络原语={sorted(GATED_PRIMITIVES)}, "
-            f"掌心Z={self._palm_z*100:.0f}cm 指尖Z={self._tip_z*100:.0f}cm")
+            f"掌心Z={self._palm_z * 100:.0f}cm 指尖Z={self._tip_z * 100:.0f}cm"
+        )
+        self.get_logger().info(
+            f"topics: in={self._input_topic} out={self._output_topic} "
+            f"tcp={self._tcp_topic} object={self._sel_pose_topic} "
+            f"label={self._sel_label_topic}"
+        )
 
     # ──────────────────────────────────────────────────────────
     #  回调
@@ -126,9 +163,7 @@ class GraspGate(Node):
     def _tcp_cb(self, msg: PoseStamped) -> None:
         q = msg.pose.orientation
         self._tcp = {
-            "pos": np.array([msg.pose.position.x,
-                             msg.pose.position.y,
-                             msg.pose.position.z]),
+            "pos": np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]),
             "quat": np.array([q.x, q.y, q.z, q.w]),
             "stamp": msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
         }
@@ -153,9 +188,7 @@ class GraspGate(Node):
             if any(w in lp.label.lower() for w in IGNORE_LABELS):
                 continue
             self._poses[lp.label] = {
-                "pos": np.array([lp.pose.position.x,
-                                 lp.pose.position.y,
-                                 lp.pose.position.z]),
+                "pos": np.array([lp.pose.position.x, lp.pose.position.y, lp.pose.position.z]),
                 "stamp": now,
             }
 
@@ -168,60 +201,21 @@ class GraspGate(Node):
         if not parts:
             return
         cmd = parts[0]
-        self.get_logger().info(
-            f"Gate 收到指令: '{msg.data.strip()}' (topic: {self._input_topic})"
-        )
+        self.get_logger().info(f"Gate 收到指令: '{msg.data.strip()}' (topic: {self._input_topic})")
 
-        # 非包络原语直接放行
+        # 非包络原语直接放行（含 mode / pose / pose_list / auto / stop / 固定手势）
         if cmd not in GATED_PRIMITIVES:
             self.get_logger().info(f"Gate PASS (非门控): {cmd} → 转发")
             self._cmd_pub.publish(msg)
             return
 
         self.get_logger().info(f"Gate 收到门控指令: {cmd}，开始三判定...")
-        now = self.get_clock().now().nanoseconds / 1e9
-
-        # 1. TCP 有效?
-        if self._tcp is None or now - self._tcp["stamp"] > self._data_timeout:
-            self._reject(cmd, "无 TCP 数据")
+        from .workbench_gate import evaluate_gate
+        selected, reason = evaluate_gate(self)
+        if selected is None:
+            self._reject(cmd, reason)
             return
-
-        # 2. 清理过期物体
-        self._cleanup(now)
-        if not self._bboxes and not self._poses:
-            self._reject(cmd, "无感知物体")
-            return
-
-        # 3. 手世界 Z 范围
-        tcp_pos = self._tcp["pos"]
-        R = Rotation.from_quat(self._tcp["quat"]).as_matrix()
-
-        palm_w = tcp_pos + R @ np.array([0.0, 0.0, self._palm_z])
-        tip_w = tcp_pos + R @ np.array([0.0, 0.0, self._tip_z])
-        wz_min_h = min(palm_w[2], tip_w[2]) - self._height_tol
-        wz_max_h = max(palm_w[2], tip_w[2]) + self._height_tol
-
-        # 4. 逐物体三判定
-        ok_list = []
-        # 优先用 bbox (有 min/max)
-        for label, obj in self._bboxes.items():
-            r = self._eval_obj(obj, R, tcp_pos, wz_min_h, wz_max_h)
-            if r["ok"]:
-                ok_list.append((label, r))
-
-        # bbox 无结果时 fallback 到 pose
-        if not ok_list and self._poses:
-            for label, obj in self._poses.items():
-                r = self._eval_pose(obj, R, tcp_pos, wz_min_h, wz_max_h)
-                if r["ok"]:
-                    ok_list.append((label, r))
-
-        if not ok_list:
-            self._reject(cmd, self._reject_reason(R, tcp_pos, wz_min_h, wz_max_h))
-            return
-
-        # 5. 选最近 (Fwd 方向 cz 最小)
-        best_label, best_r = min(ok_list, key=lambda x: x[1]["cz"])
+        best_label, best_r = selected["label"], selected["result"]
 
         # 6. 去抖
         if best_label == self._last_label:
@@ -236,9 +230,10 @@ class GraspGate(Node):
             self.get_logger().info(
                 f"Gate pending [{cmd}]: {best_label} "
                 f"H:{best_r['wz_min']:.2f}~{best_r['wz_max']:.2f} "
-                f"XY:({best_r['cx']*100:.0f},{best_r['cy']*100:.0f})cm "
-                f"Fwd:{best_r['cz']*100:.0f}cm "
-                f"({self._ok_count}/{self._de_bounce})")
+                f"XY:({best_r['cx'] * 100:.0f},{best_r['cy'] * 100:.0f})cm "
+                f"Fwd:{best_r['cz'] * 100:.0f}cm "
+                f"({self._ok_count}/{self._de_bounce})"
+            )
 
     # ──────────────────────────────────────────────────────────
     #  三判定核心
@@ -265,10 +260,15 @@ class GraspGate(Node):
         ok_fwd = cz > 0
 
         return {
-            "ok_h": ok_h, "ok_xy": ok_xy, "ok_fwd": ok_fwd,
+            "ok_h": ok_h,
+            "ok_xy": ok_xy,
+            "ok_fwd": ok_fwd,
             "ok": ok_h and ok_xy and ok_fwd,
-            "cx": cx, "cy": cy, "cz": cz,
-            "wz_min": wz_min_obj, "wz_max": wz_max_obj,
+            "cx": cx,
+            "cy": cy,
+            "cz": cz,
+            "wz_min": wz_min_obj,
+            "wz_max": wz_max_obj,
         }
 
     def _eval_pose(self, obj, R_tcp, tcp_pos, wz_min_h, wz_max_h):
@@ -286,10 +286,15 @@ class GraspGate(Node):
         ok_fwd = cz > 0
 
         return {
-            "ok_h": ok_h, "ok_xy": ok_xy, "ok_fwd": ok_fwd,
+            "ok_h": ok_h,
+            "ok_xy": ok_xy,
+            "ok_fwd": ok_fwd,
             "ok": ok_h and ok_xy and ok_fwd,
-            "cx": cx, "cy": cy, "cz": cz,
-            "wz_min": wz_min_obj, "wz_max": wz_max_obj,
+            "cx": cx,
+            "cy": cy,
+            "cz": cz,
+            "wz_min": wz_min_obj,
+            "wz_max": wz_max_obj,
         }
 
     # ──────────────────────────────────────────────────────────
@@ -298,10 +303,9 @@ class GraspGate(Node):
 
     def _cleanup(self, now):
         for d in [self._bboxes, self._poses]:
-            stale = [l for l, o in d.items()
-                     if now - o["stamp"] > self._data_timeout]
-            for l in stale:
-                del d[l]
+            stale = [label for label, o in d.items() if now - o["stamp"] > self._data_timeout]
+            for label in stale:
+                del d[label]
 
     def _reject(self, cmd: str, reason: str) -> None:
         self._last_label = None
@@ -328,12 +332,14 @@ class GraspGate(Node):
         label, cz, r = nearest
         fails = []
         if not r["ok_h"]:
-            fails.append(f"H(wz_obj=[{r['wz_min']:.2f},{r['wz_max']:.2f}] "
-                         f"vs hand=[{wz_min_h:.2f},{wz_max_h:.2f}])")
+            fails.append(
+                f"H(wz_obj=[{r['wz_min']:.2f},{r['wz_max']:.2f}] "
+                f"vs hand=[{wz_min_h:.2f},{wz_max_h:.2f}])"
+            )
         if not r["ok_xy"]:
-            fails.append(f"XY({r['cx']*100:.0f},{r['cy']*100:.0f}cm)")
+            fails.append(f"XY({r['cx'] * 100:.0f},{r['cy'] * 100:.0f}cm)")
         if not r["ok_fwd"]:
-            fails.append(f"Fwd({r['cz']*100:.0f}cm≤0)")
+            fails.append(f"Fwd({r['cz'] * 100:.0f}cm≤0)")
         return f"'{label}' {'+'.join(fails)}"
 
     def _accept(self, cmd: str, label: str, r: dict, orig_msg: String) -> None:
@@ -351,19 +357,24 @@ class GraspGate(Node):
             pose_msg.pose.orientation.w = 1.0
             self._pose_pub.publish(pose_msg)
 
+        # 发布选中 label（供 gesture_node / executor 过滤）
+        self._label_pub.publish(String(data=label))
+
         # 转发指令
         self._cmd_pub.publish(orig_msg)
 
         self.get_logger().info(
             f"Gate OK [{cmd}]: '{label}' "
             f"H:{r['wz_min']:.2f}~{r['wz_max']:.2f} "
-            f"XY:({r['cx']*100:.0f},{r['cy']*100:.0f})cm "
-            f"Fwd:{r['cz']*100:.0f}cm ✅")
-        self._status_pub.publish(
-            String(data=f"OK: {cmd}, '{label}' fwd={r['cz']:.3f}m"))
+            f"XY:({r['cx'] * 100:.0f},{r['cy'] * 100:.0f})cm "
+            f"Fwd:{r['cz'] * 100:.0f}cm ✅"
+        )
+        self._status_pub.publish(String(data=f"OK: {cmd}, '{label}' fwd={r['cz']:.3f}m"))
 
 
 def main(args=None):
+    if rclpy is None:
+        raise RuntimeError("rclpy is required to run GraspGate")
     rclpy.init(args=args)
     node = GraspGate()
     try:

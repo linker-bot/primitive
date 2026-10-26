@@ -1,0 +1,7 @@
+string hand_type
+# 空则使用服务节点的 hand_side 参数
+string hand_side
+---
+bool success
+string message
+string[] names

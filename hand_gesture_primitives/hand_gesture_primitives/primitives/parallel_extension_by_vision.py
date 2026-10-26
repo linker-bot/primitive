@@ -15,36 +15,44 @@ from typing import List
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from ..angle_bridge import AngleUnits
+from ..gesture_params import load_static_params_for_ctx
 from ..primitive_base import (
-    HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
-    lerp_angles, ABD_NEUTRAL,
+    HandGesturePrimitive,
+    PrimitiveContext,
+    PrimitiveResult,
+    lerp_angles,
 )
-from ..gesture_params import load_static_gesture_params
+from ..semantic_30 import l25_compat_remap_s30, s30_pose_from_channels
 
 REACH_THRESHOLD = 0.15
 PALM_FORWARD_MIN = 0.02
 PALM_FORWARD_MAX = 0.15
 
+# 默认目标（S30 通道名；与历史 O20 裸表投影等价）
+PARALLEL_EXT_ANGLES = s30_pose_from_channels(
+    {
+        "thumb_mcp_flex": 120,
+        "index_mcp_flex": 235,
+        "middle_mcp_flex": 235,
+        "ring_mcp_flex": 235,
+        "pinky_mcp_flex": 235,
+        "thumb_mcp_abd": 235,
+        "index_mcp_abd": 193,
+        "middle_mcp_abd": 150,
+        "ring_mcp_abd": 105,
+        "pinky_mcp_abd": 45,
+        "thumb_rot": 245,
+        "thumb_dip": 0,
+        "index_dip": 0,
+        "middle_dip": 0,
+        "ring_dip": 0,
+        "pinky_dip": 0,
+    },
+    abd_neutral=False,
+)
 
-PARALLEL_EXT_ANGLES = [
-    120,          # [0]  thumb_base: 伸直
-    235,          # [1]  index_base: 伸直
-    235,          # [2]  middle_base: 伸直
-    235,          # [3]  ring_base: 伸直
-    235,          # [4]  pinky_base: 伸直
-    235,        # [5]  thumb_abd: 外展张开对向四指
-    193,         # [6]  index_abd: 内收并拢
-    150,         # [7]  middle_abd: 内收并拢
-    105,         # [8]  ring_abd: 内收并拢
-    45,         # [9]  pinky_abd: 内收并拢
-    245,        # [10] thumb_rot: 旋转使指腹平行于四指面
-    0, 0, 0, 0,  # [11-14] rsv
-    0,          # [15] thumb_tip: 伸直
-    0,          # [16] index_tip: 伸直
-    0,          # [17] middle_tip: 伸直
-    0,          # [18] ring_tip: 伸直
-    0,          # [19] pinky_tip: 伸直
-]
+PARALLEL_EXT_ANGLES_L25 = l25_compat_remap_s30(PARALLEL_EXT_ANGLES)
 
 
 class ParallelExtensionByVision(HandGesturePrimitive):
@@ -63,44 +71,43 @@ class ParallelExtensionByVision(HandGesturePrimitive):
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
-        if ctx.hand_type in ("o6", "l6"):
-            params = load_static_gesture_params(ctx.hand_type, self.name)
-            t = elapsed / params.duration
+        u = AngleUnits(ctx)
+        if ctx.hand_type in ("o6", "l6", "l25", "o30"):
+            params = load_static_params_for_ctx(ctx.hand_type, self.name, ctx)
+            duration = params.duration if params.duration > 0 else self.TRANSITION_DURATION
+            t = elapsed / duration
             if t >= 1.0:
-                return self._move(list(params.target_angles))
-            return self._move(lerp_angles(self._start_angles, params.target_angles, t))
+                return self._move(list(params.target_angles), space=u.space)
+            return self._move(
+                lerp_angles(self._start_angles, params.target_angles, t), space=u.space
+            )
 
-        if ctx.hand_type == "l25":
-            params = load_static_gesture_params("l25", self.name)
-            t = elapsed / params.duration
-            if t >= 1.0:
-                return self._move(list(params.target_angles))
-            return self._move(lerp_angles(self._start_angles, params.target_angles, t))
+        raw_target = PARALLEL_EXT_ANGLES_L25 if ctx.hand_type == "l25" else PARALLEL_EXT_ANGLES
+        target = u.pose(raw_target)
 
-        if ctx.tcp_pose is None:
-            return self._hold("缺少 tcp_pose")
+        if ctx.hand_type != "l25":
+            if ctx.tcp_pose is None:
+                return self._hold("缺少 tcp_pose")
 
-        # 无 object_pose 时跳过可达性检查
-        # (GraspGate 已完成三判定)
-        if ctx.object_pose is not None:
-            tcp_to_obj = ctx.object_pose.position - ctx.tcp_pose.position
-            tcp_dist = float(np.linalg.norm(tcp_to_obj))
+            if ctx.object_pose is not None:
+                tcp_to_obj = ctx.object_pose.position - ctx.tcp_pose.position
+                tcp_dist = float(np.linalg.norm(tcp_to_obj))
 
-            tcp_quat = ctx.tcp_pose.orientation
-            if not np.allclose(tcp_quat, [0, 0, 0, 1]):
-                R_tcp = Rotation.from_quat(tcp_quat).as_matrix()
-                palm_forward = R_tcp[:, 2]
-                forward_dist = float(np.dot(tcp_to_obj, palm_forward))
-                if forward_dist < PALM_FORWARD_MIN or forward_dist > PALM_FORWARD_MAX:
-                    return self._hold("物体不在掌心前方 2–15cm")
-            else:
-                if tcp_dist > REACH_THRESHOLD:
-                    return self._hold("TCP到物体距离过远")
+                tcp_quat = ctx.tcp_pose.orientation
+                if not np.allclose(tcp_quat, [0, 0, 0, 1]):
+                    R_tcp = Rotation.from_quat(tcp_quat).as_matrix()
+                    palm_forward = R_tcp[:, 2]
+                    forward_dist = float(np.dot(tcp_to_obj, palm_forward))
+                    if forward_dist < PALM_FORWARD_MIN or forward_dist > PALM_FORWARD_MAX:
+                        return self._hold("物体不在掌心前方 2–15cm")
+                else:
+                    if tcp_dist > REACH_THRESHOLD:
+                        return self._hold("TCP到物体距离过远")
 
         t = elapsed / self.TRANSITION_DURATION
         if t >= 1.0:
-            return self._move(list(PARALLEL_EXT_ANGLES))
-        return self._move(lerp_angles(self._start_angles, PARALLEL_EXT_ANGLES, t))
+            return self._move(list(target), space=u.space)
+        return self._move(lerp_angles(self._start_angles, target, t), space=u.space)
 
     @property
     def done(self) -> bool:

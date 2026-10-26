@@ -3,11 +3,10 @@
 Priority (per hand type):
   O20/L25: tactile → joint current Δ (mA)
   O6:      tactile → joint torque Δ (0~100%, hand_info.torque / hand_motor_torque)
+  L6:      tactile 优先；电流路径保留但硬件 current 占位为 0（capabilities.current=false）
 """
 
 from typing import List, Optional, Sequence
-
-import numpy as np
 
 from .contact_config import ContactThresholds
 from .primitive_base import HAND_CONFIGS, HandConfig, PrimitiveContext
@@ -22,17 +21,52 @@ _FINGER_JOINT_KEYS = {
 
 
 def uses_torque_feedback(hand_type: str) -> bool:
-    """O6 无 0x36 电流，力控走 motor_torque sense。"""
+    """O6 无可用电流，力控走 motor_torque sense。L6 不走力矩（触觉优先）。"""
     return str(hand_type).lower() == "o6"
 
 
 def hand_config(ctx: PrimitiveContext) -> HandConfig:
-    return HAND_CONFIGS.get(ctx.hand_type, HAND_CONFIGS["o20"])
+    """返回 **S30 姿态索引表**（供 finger_joint_indices）。
+
+    勿直接取 ``HAND_CONFIGS['g20']``（硬件序）；g20/o20/l25 统一走
+    ``semantic_pose_config``。
+    """
+    from .primitive_base import semantic_pose_config
+
+    return semantic_pose_config(ctx.hand_type)
+
+
+def hardware_dof(ctx: PrimitiveContext) -> int:
+    """硬件电流/力矩向量长度（与 YamlHandConfig.num_joints 一致）。"""
+    from .hand_config import HandConfig as YamlHandConfig
+
+    try:
+        return int(YamlHandConfig(ctx.hand_type).num_joints)
+    except Exception:
+        cfg = HAND_CONFIGS.get(ctx.hand_type, HAND_CONFIGS["o20"])
+        return int(cfg.num_joints)
 
 
 def finger_joint_indices(cfg: HandConfig, finger_idx: int) -> List[int]:
+    """返回该指在 **S30** 语义表中的 base/tip 下标（可能含 -1）。"""
     base_key, tip_key = _FINGER_JOINT_KEYS[finger_idx]
     return [getattr(cfg, base_key), getattr(cfg, tip_key)]
+
+
+def s30_to_hw_monitor_indices(ctx: PrimitiveContext, s30_indices: Sequence[int]) -> List[int]:
+    """S30 语义下标 → hardware 电流/力矩监测下标。"""
+    from .contact_resolver import current_index_for_s30
+    from .hand_config import HandConfig as YamlHandConfig
+
+    hand = YamlHandConfig(ctx.hand_type)
+    hw: List[int] = []
+    for s30 in s30_indices:
+        if int(s30) < 0:
+            continue
+        hi = current_index_for_s30(hand, int(s30))
+        if hi is not None and hi >= 0:
+            hw.append(int(hi))
+    return sorted(set(hw))
 
 
 def tactile_contact(ctx: PrimitiveContext, finger_indices: Sequence[int]) -> bool:
@@ -40,10 +74,12 @@ def tactile_contact(ctx: PrimitiveContext, finger_indices: Sequence[int]) -> boo
     if ctx.tactile_mode == "none" or ctx.tactile_pressure is None:
         return False
     t: ContactThresholds = ctx.contact_thresholds
-    threshold = (
-        t.mass_threshold if ctx.tactile_mode == "mass"
-        else t.pressure_threshold
-    )
+    if ctx.tactile_mode == "mass":
+        threshold = t.mass_threshold
+    elif ctx.tactile_mode == "normal_force_n":
+        threshold = t.normal_force_threshold_n
+    else:
+        threshold = t.pressure_threshold
     p = ctx.tactile_pressure
     return any(float(p[i]) > threshold for i in finger_indices if i < len(p))
 
@@ -64,9 +100,11 @@ def tactile_finger_for_group(group_id: str, joint_names: Sequence[str]) -> Optio
 
 
 def feedback_at_hw_indices(
-    ctx: PrimitiveContext, hw_indices: Sequence[int],
+    ctx: PrimitiveContext,
+    hw_indices: Sequence[int],
 ) -> List[float]:
-    """O6: 力矩 0~100；O20/L25: 电流 mA。无效采样为 -1。"""
+    """O6: 力矩 0~100；O20/L25: 电流 mA；L6: 电流通道占位时采样恒为 0，依赖触觉。
+    无效采样为 -1。"""
     out: List[float] = []
     if uses_torque_feedback(ctx.hand_type):
         t = ctx.joint_torque
@@ -113,15 +151,15 @@ def feedback_delta_exceeded(
 
 
 def capture_feedback_baseline(ctx: PrimitiveContext) -> List[float]:
-    """整段 joint 空间基线（按 hand_config.num_joints 长度）。"""
-    cfg = hand_config(ctx)
-    n = cfg.num_joints
+    """整段 joint 空间基线（按硬件 DOF 长度，非 S30）。"""
+    n = hardware_dof(ctx)
     if uses_torque_feedback(ctx.hand_type):
         t = ctx.joint_torque
         if t is None:
             return [-1.0] * n
         return [float(t[i]) if i < len(t) else -1.0 for i in range(n)]
-    return [float(c) for c in ctx.joint_currents[:n]]
+    currents = ctx.joint_currents
+    return [float(currents[i]) if i < len(currents) else -1.0 for i in range(n)]
 
 
 def force_close_group_contact(
@@ -135,8 +173,7 @@ def force_close_group_contact(
     """顺序力控单组接触：触觉优先，否则力矩/电流增量。"""
     if ctx.tactile_mode != "none" and tactile_finger is not None:
         return tactile_contact(ctx, [tactile_finger])
-    return feedback_delta_exceeded(
-        ctx, baseline, monitor_hw, contact_delta)
+    return feedback_delta_exceeded(ctx, baseline, monitor_hw, contact_delta)
 
 
 def hold_feedback_exceeded(
@@ -167,20 +204,17 @@ def feedback_contact(
         return tactile_contact(ctx, finger_indices)
 
     cfg = hand_config(ctx)
-    delta = (
-        t.torque_delta_pct if uses_torque_feedback(ctx.hand_type)
-        else t.current_delta
-    )
-    hw: List[int] = []
+    delta = t.torque_delta_pct if uses_torque_feedback(ctx.hand_type) else t.current_delta
+    s30: List[int] = []
     for finger_idx in finger_indices:
         for joint_idx in finger_joint_indices(cfg, finger_idx):
             if joint_idx >= 0:
-                hw.append(joint_idx)
+                s30.append(joint_idx)
+    hw = s30_to_hw_monitor_indices(ctx, s30)
     if not hw:
         return False
-    # baseline 与 hw 对齐：取 baseline[joint_idx]
-    base_hw = [float(baseline[i]) if i < len(baseline) else -1.0 for i in hw]
-    return feedback_delta_exceeded(ctx, base_hw, hw, delta)
+    # baseline 为整段 hardware 向量；用 hw 下标取值
+    return feedback_delta_exceeded(ctx, baseline, hw, delta)
 
 
 def pinch_motion_should_stop(
@@ -205,12 +239,14 @@ def pinch_motion_should_stop(
 
     if not monitor_hw:
         return False, ""
+
     threshold = 200.0 if ctx.hand_type == "o20" else 400.0
     currents = ctx.joint_currents
     for hi in monitor_hw:
         if hi < len(currents) and float(currents[hi]) > threshold:
             return True, f"stall_current hw{hi}={currents[hi]:.0f}mA>{threshold:.0f}"
     return False, ""
+
 
 def pinch_motion_should_stop_toque(
     ctx: PrimitiveContext,
@@ -220,10 +256,10 @@ def pinch_motion_should_stop_toque(
     lerp_progress: float = 1.0,
     baseline: Optional[Sequence[float]] = None,
 ) -> tuple[bool, str]:
-    """静态 timed pinch 停指。
+    """静态 timed pinch 停指 — 压感 / 关节扭矩。
 
-    O6：仅压感。/hand_motor_torque 空载收指常态 60~80%，绝对值/Δ 均会误触。
-    O20/L25：压感 + 关节电流绝对阈值 (mA)。
+    O6: 仅压感（motor_torque 空载 60~80%，易误触）。
+    O20/L25: 压感 + 关节扭矩阈值。
     """
     if ctx.tactile_mode != "none" and tactile_fingers:
         if tactile_contact(ctx, tactile_fingers):
@@ -234,16 +270,15 @@ def pinch_motion_should_stop_toque(
 
     if not monitor_hw:
         return False, ""
-    
+
     threshold = 8.0 if ctx.hand_type == "o20" or ctx.hand_type == "l25" else 400.0
-    currents = ctx.joint_torque
-    k=-np.inf
+    torques = ctx.joint_torque
+    if torques is None:
+        return False, ""
     for hi in monitor_hw:
-        k=max(k,float(currents[hi]))
-        
-        if hi < len(currents) and float(currents[hi]) > threshold:
-            return True, f"stall_current hw{hi}={currents[hi]:.0f}mA>{threshold:.0f}"
-    return False, f"{currents}"
+        if hi < len(torques) and float(torques[hi]) > threshold:
+            return True, f"stall_torque hw{hi}={torques[hi]:.1f}>{threshold:.1f}"
+    return False, ""
 
 
 def pinch_motion_stop_detail(
@@ -270,7 +305,7 @@ def pinch_motion_stop_detail(
         for j, hi in enumerate(monitor_hw):
             if hi < len(ctx.joint_currents):
                 parts.append(f"current_hw{hi}={ctx.joint_currents[hi]:.0f}mA")
-        parts.append(f"current_stop>200mA")
+        parts.append("current_stop>200mA")
     return " ".join(parts)
 
 
@@ -290,36 +325,34 @@ def feedback_blocks_motion(
     t = ctx.contact_thresholds
     delta = contact_delta
     if delta is None:
-        delta = (
-            t.torque_delta_pct if uses_torque_feedback(ctx.hand_type)
-            else t.current_delta
-        )
+        delta = t.torque_delta_pct if uses_torque_feedback(ctx.hand_type) else t.current_delta
     if baseline is not None and feedback_delta_exceeded(
-        ctx, baseline, monitor_hw, delta,
+        ctx,
+        baseline,
+        monitor_hw,
+        delta,
     ):
         return True
     if not uses_torque_feedback(ctx.hand_type):
         threshold = 200.0 if ctx.hand_type == "o20" else 400.0
         currents = ctx.joint_currents
-        if any(
-            i < len(currents) and float(currents[i]) > threshold
-            for i in monitor_hw
-        ):
+        if any(i < len(currents) and float(currents[i]) > threshold for i in monitor_hw):
             return True
     return False
 
 
 def monitors_for_fingers(
-    ctx: PrimitiveContext, finger_indices: Sequence[int],
+    ctx: PrimitiveContext,
+    finger_indices: Sequence[int],
 ) -> tuple[List[int], List[int]]:
     """contact_fingers 下标 → (hardware 监测关节, 触觉指下标)。"""
     cfg = hand_config(ctx)
-    hw: List[int] = []
+    s30: List[int] = []
     for fi in finger_indices:
         for ji in finger_joint_indices(cfg, int(fi)):
             if ji >= 0:
-                hw.append(ji)
-    return sorted(set(hw)), [int(f) for f in finger_indices]
+                s30.append(ji)
+    return s30_to_hw_monitor_indices(ctx, s30), [int(f) for f in finger_indices]
 
 
 class MotionFeedbackGuard:
@@ -429,7 +462,10 @@ class FingerContactTracker:
             if self._settle_count == settle_frames:
                 self._baseline = capture_feedback_baseline(ctx)
         return feedback_contact(
-            ctx, finger_indices, self._baseline, self._settle_count,
+            ctx,
+            finger_indices,
+            self._baseline,
+            self._settle_count,
         )
 
 

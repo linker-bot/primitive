@@ -1,126 +1,224 @@
+from hand_gesture_primitives.topic_defaults import side_hand_topics
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
 
 
-def generate_launch_description():
-    return LaunchDescription([
-        DeclareLaunchArgument("hand_side", default_value="left",
-                              description="left 或 right"),
-        DeclareLaunchArgument("hand_type", default_value="o20",
-                              description="手型: o20 / l25 / o6；l20 为 l25 兼容别名"),
-        DeclareLaunchArgument("hand_joint", default_value="",
-                              description="hand_type 兼容别名，如 O20 / L25 / L20 (非空时覆盖 hand_type；L20≡L25)"),
-        DeclareLaunchArgument("cmd_topic", default_value="/hand_gesture_cmd_exec",
-                              description="手势指令输入 topic"),
-        DeclareLaunchArgument("tcp_pose_topic", default_value="/tcp_pose",
-                              description="手腕 TCP 位姿 topic"),
-        DeclareLaunchArgument("object_pose_topic", default_value="/object_pose",
-                              description="物体位姿 topic (相对手腕)"),
-        DeclareLaunchArgument("bboxes_3d_topic",
-                              default_value="/camera_head/detection_bbox/bboxes_3d",
-                              description="LabeledBBox3DArray topic (感知物体尺寸/方向)"),
-        DeclareLaunchArgument("labeled_pose_topic",
-                              default_value="/camera_head/perception/labeled_poses",
-                              description="感知 pipeline LabeledPoseArray topic"),
-        DeclareLaunchArgument("target_object_label", default_value="",
-                              description="待抓取物体 label（空=自动选最高 score）"),
-        DeclareLaunchArgument("reach_check_strict", default_value="false",
-                              description="可达性严格检查: true=不可达时拒绝执行"),
-        DeclareLaunchArgument("reach_max_distance", default_value="0.15",
-                              description="TCP→目标最大允许距离 (m)"),
-        DeclareLaunchArgument("palm_offset_x", default_value="0.0",
-                              description="手掌中心相对 TCP 偏移 X (m)"),
-        DeclareLaunchArgument("palm_offset_y", default_value="0.0",
-                              description="手掌中心相对 TCP 偏移 Y (m)"),
-        DeclareLaunchArgument("palm_offset_z", default_value="-0.05",
-                              description="手掌中心相对 TCP 偏移 Z (m)"),
-        DeclareLaunchArgument("publish_fingertips", default_value="true",
-                              description="是否发布 FK 指尖位置 topic"),
-        DeclareLaunchArgument("fingertip_frame", default_value="",
-                              description="指尖 marker 坐标系 (空=自动 l_/r_hand_base_link)"),
-        DeclareLaunchArgument("urdf_path", default_value="",
-                              description="手部 URDF 路径 (空=自动搜索)"),
-        DeclareLaunchArgument("launch_gate", default_value="false",
-                              description="是否同时启动 GraspGate 门控节点"),
-        DeclareLaunchArgument(
-            "contact_config_path", default_value="",
-            description="接触/电流阈值 YAML 路径 (空=包内 contact_thresholds.yaml)"),
-        DeclareLaunchArgument("contact_current_delta", default_value="270.0",
-                              description="无触觉时电流增量接触阈值 (mA)"),
-        DeclareLaunchArgument("contact_current_delta_narrow", default_value="250.0",
-                              description="窄物体原语电流增量阈值 (mA)"),
-        DeclareLaunchArgument("hold_safe_current", default_value="800.0",
-                              description="力控持握安全电流上限 (mA)"),
-        DeclareLaunchArgument("overload_current_threshold", default_value="1000.0",
-                              description="全局过载保护电流阈值 (mA)"),
-        DeclareLaunchArgument("overload_duration_sec", default_value="2.0",
-                              description="过载保护持续时间 (s)"),
+def _truthy(value: str) -> bool:
+    return value.strip().lower() in ("1", "true", "yes", "on")
 
-        # ── 手势节点 ──
+
+def _launch_setup(context, *args, **kwargs):
+    side = LaunchConfiguration("hand_side").perform(context).strip().lower()
+    if side not in ("left", "right"):
+        raise RuntimeError(f"hand_side must be left|right, got {side!r}")
+
+    launch_gate = _truthy(LaunchConfiguration("launch_gate").perform(context))
+    topics = side_hand_topics(side)
+
+    cmd_topic = LaunchConfiguration("cmd_topic").perform(context).strip()
+    if not cmd_topic:
+        # With gate: listen to exec; without gate: listen to raw cmd.
+        cmd_topic = topics["gesture_cmd_exec"] if launch_gate else topics["gesture_cmd"]
+
+    tcp_pose_topic = LaunchConfiguration("tcp_pose_topic").perform(context).strip()
+    object_pose_topic = LaunchConfiguration("object_pose_topic").perform(context).strip()
+
+    nodes = [
         Node(
             package="hand_gesture_primitives",
             executable="gesture_node",
-            name="hand_gesture_node",
+            name=f"{side}_hand_gesture_node",
             output="screen",
-            parameters=[{
-                "hand_side": LaunchConfiguration("hand_side"),
-                "hand_type": LaunchConfiguration("hand_type"),
-                "hand_joint": LaunchConfiguration("hand_joint"),
-                "cmd_topic": LaunchConfiguration("cmd_topic"),
-                "tcp_pose_topic": LaunchConfiguration("tcp_pose_topic"),
-                "object_pose_topic": LaunchConfiguration("object_pose_topic"),
-                "bboxes_3d_topic": LaunchConfiguration("bboxes_3d_topic"),
-                "labeled_pose_topic": LaunchConfiguration("labeled_pose_topic"),
-                "target_object_label": LaunchConfiguration("target_object_label"),
-                "reach_check_strict": LaunchConfiguration("reach_check_strict"),
-                "reach_max_distance": LaunchConfiguration("reach_max_distance"),
-                "palm_offset_x": LaunchConfiguration("palm_offset_x"),
-                "palm_offset_y": LaunchConfiguration("palm_offset_y"),
-                "palm_offset_z": LaunchConfiguration("palm_offset_z"),
-                "publish_fingertips": LaunchConfiguration("publish_fingertips"),
-                "fingertip_frame": LaunchConfiguration("fingertip_frame"),
-                "urdf_path": LaunchConfiguration("urdf_path"),
-                "contact_config_path": LaunchConfiguration("contact_config_path"),
-                "contact_current_delta": ParameterValue(
-                    LaunchConfiguration("contact_current_delta"), value_type=float),
-                "contact_current_delta_narrow": ParameterValue(
-                    LaunchConfiguration("contact_current_delta_narrow"),
-                    value_type=float),
-                "hold_safe_current": ParameterValue(
-                    LaunchConfiguration("hold_safe_current"), value_type=float),
-                "overload_current_threshold": ParameterValue(
-                    LaunchConfiguration("overload_current_threshold"),
-                    value_type=float),
-                "overload_duration_sec": ParameterValue(
-                    LaunchConfiguration("overload_duration_sec"), value_type=float),
-            }],
+            additional_env={"PYTHONNOUSERSITE": "1"},
+            parameters=[
+                {
+                    "hand_side": side,
+                    "hand_type": LaunchConfiguration("hand_type").perform(context),
+                    "hand_joint": LaunchConfiguration("hand_joint").perform(context),
+                    "cmd_topic": cmd_topic,
+                    "state_topic": LaunchConfiguration("state_topic").perform(context),
+                    "cmd_backend": LaunchConfiguration("cmd_backend").perform(context),
+                    "hand_cmd_topic": LaunchConfiguration("hand_cmd_topic").perform(context),
+                    "ros2_control_command_units": LaunchConfiguration(
+                        "ros2_control_command_units"
+                    ).perform(context),
+                    "robot_description": LaunchConfiguration("robot_description").perform(context),
+                    "g20_joint_order": LaunchConfiguration("g20_joint_order").perform(context),
+                    "control_rate": float(LaunchConfiguration("control_rate").perform(context)),
+                    "primitive_speed": float(
+                        LaunchConfiguration("primitive_speed").perform(context)
+                    ),
+                    "tcp_pose_topic": tcp_pose_topic,
+                    "object_pose_topic": object_pose_topic,
+                    "bboxes_3d_topic": LaunchConfiguration("bboxes_3d_topic").perform(context),
+                    "labeled_pose_topic": LaunchConfiguration("labeled_pose_topic").perform(
+                        context
+                    ),
+                    "target_object_label": LaunchConfiguration("target_object_label").perform(
+                        context
+                    ),
+                    "reach_check_strict": _truthy(
+                        LaunchConfiguration("reach_check_strict").perform(context)
+                    ),
+                    "reach_max_distance": float(
+                        LaunchConfiguration("reach_max_distance").perform(context)
+                    ),
+                    "palm_offset_x": float(LaunchConfiguration("palm_offset_x").perform(context)),
+                    "palm_offset_y": float(LaunchConfiguration("palm_offset_y").perform(context)),
+                    "palm_offset_z": float(LaunchConfiguration("palm_offset_z").perform(context)),
+                    "publish_fingertips": _truthy(
+                        LaunchConfiguration("publish_fingertips").perform(context)
+                    ),
+                    "fingertip_frame": LaunchConfiguration("fingertip_frame").perform(context),
+                    "urdf_path": LaunchConfiguration("urdf_path").perform(context),
+                    "contact_config_path": LaunchConfiguration("contact_config_path").perform(
+                        context
+                    ),
+                    "contact_current_delta": float(
+                        LaunchConfiguration("contact_current_delta").perform(context)
+                    ),
+                    "contact_current_delta_narrow": float(
+                        LaunchConfiguration("contact_current_delta_narrow").perform(context)
+                    ),
+                    "hold_safe_current": float(
+                        LaunchConfiguration("hold_safe_current").perform(context)
+                    ),
+                    "overload_current_threshold": float(
+                        LaunchConfiguration("overload_current_threshold").perform(context)
+                    ),
+                    "overload_duration_sec": float(
+                        LaunchConfiguration("overload_duration_sec").perform(context)
+                    ),
+                }
+            ],
         ),
+    ]
 
-        # ── 门控节点 (可选) ──
-        Node(
-            package="hand_gesture_primitives",
-            executable="grasp_gate",
-            name="grasp_gate",
-            output="screen",
-            parameters=[{
-                "tcp_pose_topic": LaunchConfiguration("tcp_pose_topic"),
-                "bbox_topic": LaunchConfiguration("bboxes_3d_topic"),
-                "labeled_pose_topic": LaunchConfiguration("labeled_pose_topic"),
-                "input_cmd_topic": "/hand_gesture_cmd",
-                "output_cmd_topic": "/hand_gesture_cmd_exec",
-                "selected_pose_topic": "/object_pose",
-                # 手几何 — 三判定参数
-                "palm_z": 0.06,
-                "tip_z": 0.18,
-                "half_w": 0.20,
-                "half_h": 0.15,
-                "height_tol": 0.05,
-                "de_bounce": 3,
-            }],
-            condition=IfCondition(LaunchConfiguration("launch_gate")),
-        ),
-    ])
+    if launch_gate:
+        nodes.append(
+            Node(
+                package="hand_gesture_primitives",
+                executable="grasp_gate",
+                name=f"{side}_grasp_gate",
+                output="screen",
+                additional_env={"PYTHONNOUSERSITE": "1"},
+                parameters=[
+                    {
+                        "hand_side": side,
+                        "tcp_pose_topic": tcp_pose_topic,
+                        "bbox_topic": LaunchConfiguration("bboxes_3d_topic").perform(context),
+                        "labeled_pose_topic": LaunchConfiguration("labeled_pose_topic").perform(
+                            context
+                        ),
+                        "input_cmd_topic": "",
+                        "output_cmd_topic": "",
+                        "selected_pose_topic": object_pose_topic,
+                        "palm_z": 0.06,
+                        "tip_z": 0.18,
+                        "half_w": 0.20,
+                        "half_h": 0.15,
+                        "height_tol": 0.05,
+                        "de_bounce": 3,
+                    }
+                ],
+            ),
+        )
+
+    return nodes
+
+
+def generate_launch_description():
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument(
+                "pose_dir",
+                default_value=EnvironmentVariable("HAND_GESTURE_POSE_DIR", default_value=""),
+                description="Explicit shared pose directory; no implicit HOME fallback",
+            ),
+            SetEnvironmentVariable("HAND_GESTURE_POSE_DIR", LaunchConfiguration("pose_dir")),
+            DeclareLaunchArgument(
+                "primitive_speed", default_value="1.0", description="Playback speed, 0.25..3.0"
+            ),
+            DeclareLaunchArgument("hand_side", default_value="left", description="left 或 right"),
+            DeclareLaunchArgument(
+                "hand_type", default_value="o20", description="手型: o20 / l25 / o6 / l6"
+            ),
+            DeclareLaunchArgument(
+                "hand_joint",
+                default_value="",
+                description="hand_type 别名，如 O20 / L25 / O6 / L6",
+            ),
+            DeclareLaunchArgument(
+                "cmd_topic",
+                default_value="",
+                description="指令输入；空=无门控用 /{side}_hand/gesture_cmd，"
+                "有门控用 /{side}_hand/gesture_cmd_exec",
+            ),
+            DeclareLaunchArgument("state_topic", default_value="/joint_states"),
+            DeclareLaunchArgument("cmd_backend", default_value=""),
+            DeclareLaunchArgument("hand_cmd_topic", default_value=""),
+            DeclareLaunchArgument(
+                "ros2_control_command_units",
+                default_value="radians",
+                description="radians=URDF弧度（mock/sim/real 默认）；hardware=遗留SDK 0~255",
+            ),
+            DeclareLaunchArgument(
+                "robot_description",
+                default_value="",
+                description="radians 模式用于读取精确关节限位的 URDF XML",
+            ),
+            DeclareLaunchArgument(
+                "g20_joint_order",
+                default_value="",
+                description="G20 命令序：l25_urdf（整机）| native（手-only）| 空=探测",
+            ),
+            DeclareLaunchArgument(
+                "control_rate",
+                default_value="10.0",
+                description="原语 commands 下发频率 Hz（默认 10，可设 100）",
+            ),
+            DeclareLaunchArgument(
+                "tcp_pose_topic", default_value="", description="空=/{side}_hand/tcp_pose"
+            ),
+            DeclareLaunchArgument(
+                "object_pose_topic", default_value="", description="空=/{side}_hand/object_pose"
+            ),
+            DeclareLaunchArgument(
+                "bboxes_3d_topic", default_value="/camera_head/detection_bbox/bboxes_3d"
+            ),
+            DeclareLaunchArgument(
+                "labeled_pose_topic", default_value="/camera_head/perception/labeled_poses"
+            ),
+            DeclareLaunchArgument("target_object_label", default_value=""),
+            DeclareLaunchArgument("reach_check_strict", default_value="false"),
+            DeclareLaunchArgument("reach_max_distance", default_value="0.15"),
+            DeclareLaunchArgument("palm_offset_x", default_value="0.0"),
+            DeclareLaunchArgument("palm_offset_y", default_value="0.0"),
+            DeclareLaunchArgument("palm_offset_z", default_value="-0.05"),
+            DeclareLaunchArgument(
+                "publish_fingertips",
+                default_value="true",
+                description="是否发布 FK 指尖 Marker/数组（需 pinocchio + URDF）",
+            ),
+            DeclareLaunchArgument("fingertip_frame", default_value=""),
+            DeclareLaunchArgument(
+                "urdf_path",
+                default_value="",
+                description="FK URDF 绝对路径；空=自动搜索 evo_work / linkerhand-urdf（含 l6v3.1）",
+            ),
+            DeclareLaunchArgument("launch_gate", default_value="false"),
+            DeclareLaunchArgument("contact_config_path", default_value=""),
+            DeclareLaunchArgument(
+                "contact_current_delta",
+                default_value="270.0",
+                description="O20/L25 电流接触增量 (mA)；O6 用力矩阈值，L6 以触觉为主",
+            ),
+            DeclareLaunchArgument("contact_current_delta_narrow", default_value="250.0"),
+            DeclareLaunchArgument("hold_safe_current", default_value="800.0"),
+            DeclareLaunchArgument("overload_current_threshold", default_value="1000.0"),
+            DeclareLaunchArgument("overload_duration_sec", default_value="2.0"),
+            OpaqueFunction(function=_launch_setup),
+        ]
+    )

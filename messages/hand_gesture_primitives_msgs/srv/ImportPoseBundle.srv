@@ -1,0 +1,11 @@
+string input_path
+string strategy
+string hand_type
+string hand_side
+string default_side
+---
+bool success
+string message
+uint32 imported
+uint32 skipped
+uint32 failed

@@ -1,11 +1,20 @@
-# Object meshes for vision primitives (optional)
+# Optional object meshes
 
-Place per-object models as:
+Some vision primitives use an object mesh to choose a thumb pre-shape. Store each
+model under its target label:
 
-```
+```text
 data/mesh_model/{label}/model.obj
 ```
 
-Override root: `export MESH_MODEL_DIR=/path/to/meshes`
+For an external directory or an installed deployment, set:
 
-Used by force-control `*_by_vision` primitives for thumb_rot pre-shaping when mesh geometry is available. Without mesh, primitives fall back to `object_size` from `bboxes_3d`.
+```bash
+export MESH_MODEL_DIR=/path/to/meshes
+```
+
+The mesh loaders also require the optional `trimesh` Python package. Object meshes
+are not bundled in the gesture wheel. A missing or unreadable mesh uses the
+primitive's default pre-shape; this does not replace its other vision, FK or
+feedback requirements. These object models are distinct from the hand URDF/meshes
+used for FK and visualization.

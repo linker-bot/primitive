@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Teach Panel · 手势示教</title>
+  <link rel="stylesheet" href="/static/app.css?v=0.2.2-final" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <strong id="title">Teach Panel</strong>
+      <span id="meta" class="muted"></span>
+    </div>
+    <div class="badges">
+      <span id="modeBadge" class="badge">mode=?</span>
+      <span id="stateBadge" class="badge">DISCONNECTED</span>
+      <span id="primBadge" class="badge muted">hold</span>
+      <span id="editBadge" class="badge edit hidden">编辑中</span>
+    </div>
+    <div class="hand-navigation">
+      <label for="panelSide">机械手 <select id="panelSide" aria-label="示教侧别" disabled></select></label>
+      <a id="workbenchLink" href="/workbench" title="支持的有限动作可按住推进，松开暂停，再次按住继续；也可设置原语菜单。控制模式下请先停止手势并退出示教后进入。">按住推进与菜单</a>
+      <span id="sideSwitchHint" class="muted" role="status"></span>
+    </div>
+    <div class="actions">
+      <button id="btnTeach" type="button">开始示教</button>
+      <button id="btnExit" type="button">退出示教</button>
+      <button id="btnReinit" type="button" class="secondary" title="mode primitive + init">重新初始化</button>
+      <button id="btnSync" type="button" class="secondary" title="用当前 hand_state 同步滑条">同步反馈</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="hand-panel">
+      <section class="builtin-panel" aria-label="内置手势">
+        <div class="card-head"><h2>内置手势</h2><div class="builtin-controls">
+          <label for="panelSpeed">速度 <input id="panelSpeed" aria-label="示教手势速度倍率" type="number" min="0.25" max="3" step="0.05" value="1" disabled> ×</label>
+          <button id="panelStop" type="button" class="danger" disabled>停止手势</button>
+        </div></div>
+        <div class="builtin-tabs" role="tablist" aria-label="内置手势分类">
+          <button id="builtinDefault" type="button" role="tab" data-builtin-group="default" aria-selected="true">默认原语</button>
+          <button id="builtinPerception" type="button" role="tab" data-builtin-group="perception" aria-selected="false">感知原语</button>
+        </div>
+        <div class="builtin-search"><label for="builtinSearch">筛选 <input id="builtinSearch" type="search" placeholder="名称或说明" aria-label="筛选内置手势"></label><button id="clearBuiltinSearch" type="button" class="secondary" hidden>清除筛选</button></div>
+        <p id="builtinFilterState" class="muted">正在读取内置手势…</p>
+        <p id="builtinPause" class="builtin-notice" hidden><span id="builtinPauseText"></span> <button id="panelResume" type="button">恢复控制</button></p>
+        <p id="builtinReadonly" class="builtin-notice" hidden>只读观察：可编辑和保存姿态，不发送动作。</p>
+        <p id="builtinMessage" class="builtin-notice" role="status" hidden></p>
+        <div id="builtinList" class="builtin-list" role="tabpanel"></div>
+      </section>
+      <div class="hand-toolbar">
+        <span id="handHint" class="muted">掌心朝屏幕外 · 左手拇在左 / 上指尖→根弯→下侧摆</span>
+        <div class="hand-toolbar-right">
+          <label class="chk" title="仅改显示；滑条/下发仍为 0–255">
+            显示
+            <select id="displayUnit" aria-label="关节显示单位">
+              <option value="hw255">0–255</option>
+              <option value="rad">弧度 rad</option>
+              <option value="deg">角度 °</option>
+            </select>
+          </label>
+          <span class="muted fine-hint" title="聚焦滑条或数值框后可用">拖动滑条 · 点数值键盘输入 · ↑↓微调 · 滚轮</span>
+          <label class="chk">
+            <input id="chkShowRsv" type="checkbox" /> 显示保留关节
+          </label>
+        </div>
+      </div>
+      <div id="handCanvas" class="hand-canvas" aria-label="hand joint sliders"></div>
+    </section>
+
+    <aside class="poses">
+      <section class="card">
+        <div class="card-head">
+          <h2>手势编辑</h2>
+          <button id="btnNewPose" type="button" class="secondary tiny" title="清空编辑上下文，开始新手势">新建手势</button>
+        </div>
+        <p id="msg" class="msg"></p>
+        <p id="editHint" class="edit-hint hidden">正在编辑：<strong id="editName"></strong>（保存将覆盖）</p>
+        <label>手势名 <input id="poseName" placeholder="my_grip" autocomplete="off"
+          title="改名后自动切换关键帧上下文；新手势请点「新建手势」" /></label>
+        <label>说明 <input id="poseDesc" placeholder="可选备注" /></label>
+        <label>时长(s) <input id="poseDur" type="number" step="0.1" value="0.6" min="0.2" title="本关键帧 AUTO 段时长" /></label>
+        <div class="row">
+          <button id="btnSave" type="button" title="无关键帧名=单点；有关键帧名=追加/覆盖该帧">保存</button>
+          <button id="btnPlay" type="button" title="按关键帧顺序 AUTO">播放全部</button>
+          <button id="btnStopPlay" type="button" class="secondary">停止</button>
+          <button id="btnDelete" type="button" class="danger">删除手势</button>
+          <button id="btnClearEdit" type="button" class="secondary">取消编辑</button>
+        </div>
+      </section>
+
+      <section class="card keyframe-box">
+        <div class="card-head">
+          <h2>添加中间态</h2>
+          <button id="btnAddKf" type="button" class="btn-plus" title="需示教模式；把当前滑条追加到当前手势">＋ 添加</button>
+        </div>
+        <label class="kf-name-row">帧名
+          <input id="poseKeyframe" placeholder="pre / grasp / …" autocomplete="off"
+            title="＋添加时写入当前手势；换手势名后会重置建议" />
+          <button id="btnSuggestKf" type="button" class="secondary tiny" title="按当前手势已有帧建议下一帧名">建议名</button>
+        </label>
+        <p id="keyframeEmpty" class="muted pose-play-hint">示教摆好姿 → 填帧名 →「＋ 添加」。回放/载入见下方姿态库。</p>
+
+        <div class="timeline">
+          <div class="timeline-head">
+            <span>全局进度</span>
+            <span id="timelineLabel" class="muted">—</span>
+          </div>
+          <div class="timeline-track">
+            <div id="timelineMarks" class="timeline-marks"></div>
+            <input id="progressSlider" type="range" min="0" max="1000" value="0" step="1"
+              title="按各关键帧 duration 加权，拖动跨段细控" />
+          </div>
+          <div class="timeline-meta">
+            <span id="progressVal">0%</span>
+            <span id="motionBadge" class="muted">drive=- · kf=- · p=-</span>
+          </div>
+        </div>
+        <p class="muted pose-play-hint">
+          需至少 1 个关键帧才能拖进度。姿态库展开后可回放/载入/删帧。
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>姿态库</h2>
+        <p class="muted pose-play-hint">手势 → 关键帧。「N帧」= 关键帧数量。回放走引擎单段 AUTO。</p>
+        <label class="pose-filter-row">过滤
+          <input id="poseFilter" type="search" placeholder="按手势名过滤…" autocomplete="off" />
+        </label>
+        <ul id="poseList" class="pose-tree"></ul>
+        <label class="chk block">
+          <input id="chkUseTargets" type="checkbox" checked /> 保存时用滑条目标（推荐）
+        </label>
+        <label class="chk block">
+          <input id="chkReturnTeach" type="checkbox" checked /> AUTO 播放结束后回到示教
+        </label>
+      </section>
+
+      <section class="card transfer">
+        <div class="transfer-title">跨机迁移</div>
+        <p class="muted pose-play-hint">仅合并<strong>当前产品手型 + 侧</strong>（见页眉）。</p>
+        <div class="row transfer-row">
+          <button id="btnExportBundle" type="button" class="secondary">导出下载</button>
+          <button id="btnImportBundle" type="button" class="secondary">导入文件</button>
+          <button id="btnImportFactory" type="button" class="secondary">导入出厂预设</button>
+          <input id="importBundleFile" type="file" accept=".json,application/json,.pose_bundle.json" class="hidden" />
+        </div>
+        <label class="transfer-strategy">冲突策略
+          <select id="importStrategy">
+            <option value="skip" selected>跳过已有</option>
+            <option value="overwrite">覆盖</option>
+            <option value="rename">重命名导入（仅文件）</option>
+          </select>
+        </label>
+        <label class="chk block">
+          <input id="chkVerifyChecksum" type="checkbox" checked /> 导入校验 checksum
+        </label>
+      </section>
+    </aside>
+  </main>
+  <script src="/static/hand_layout.js?v=kf4"></script>
+  <script src="/static/app.js?v=0.2.2-final"></script>
+</body>
+</html>

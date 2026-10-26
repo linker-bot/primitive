@@ -12,7 +12,7 @@
 
 以下示例以默认 `{cam_ns}=/camera_head` 为准。
 
-**发布状态图例：** ✅ 始终 = 有检测结果时每帧发布（可能为空数组）；✅ 默认开 = 默认 launch 配置下发布；⚠️ = 有条件或默认无内容；❌ = 需显式开启 launch 参数。
+**发布状态图例：** ✅ 始终 = 处理图像时发布，结果可能为空数组；✅ 默认开 = 默认 launch 配置下发布；⚠️ = 有条件或默认无内容；❌ = 需显式开启 launch 参数。
 
 ### detection_bbox
 
@@ -31,7 +31,7 @@
 | `/camera_head/detection_bbox/mask` | `sensor_msgs/Image` | ❌ 需显式开启 | 实例分割 mask 图像；`publish_mask_image:=true` |
 | `/camera_head/detection_bbox/track_debug` | `std_msgs/String` | ❌ 需显式开启 | JSON 跟踪状态；`publish_track_debug:=true` |
 
-**TF（非 Topic）：** `publish_static_tf:=true`（默认）且有标定时，广播 `world → camera_head_color_optical_frame`。
+**TF：** `publish_static_tf:=true`（默认）且有标定时，通过 `/tf_static` 广播世界系到相机光学系的变换；相机 frame 使用图像消息中的 `header.frame_id`。
 
 ---
 
@@ -76,13 +76,13 @@
 - `publish_workbench_bbox=true` → `header.frame_id = workbench_frame_id`（默认 `world`）
 - 否则 → `header.frame_id = 相机 optical frame`
 
-### 2.2 TF 广播（非 Topic）
+### 2.2 TF 广播
 
 当 `publish_static_tf:=true` 且加载手眼标定（`calib_file`）后，节点广播静态变换：
 
 ```
 {workbench_frame_id}  →  {cam_frame}
-默认: world → camera_head_color_optical_frame
+world_frame 默认 world；cam_frame 取相机图像的 header.frame_id
 ```
 
 RViz Fixed Frame 应设为 `world`（或 `workbench_frame_id`）。
@@ -122,7 +122,7 @@ float32[3] max          # AABB 最大角
 float32[4] orientation  # PCA 主轴四元数 (x, y, z, w)；不可用时为单位四元数
 float32[3] top_normal   # 顶面法向量（抓取接近方向参考）
 string grasp_type       # 抓取类型提示: precision / lateral / power / ""
-string track_mode       # 跟踪模式: fast_track / refined / recovered / reinitialized / ""
+string track_mode       # 跟踪模式: fast_track / refined / corrected / recovered / reinitialized / ""
 
 # LabeledBBox3DArray
 std_msgs/Header header
@@ -238,4 +238,4 @@ ros2 topic info /camera_head/detection_bbox/bboxes_2d -v
 | `use_pixel3d` | `false` | 是否异步生成完整 mesh 并更新 `surface_meshes` |
 | `calib_file` | 自动查找 | 无标定时, 3D / world 输出不可用 |
 
-完整参数说明见 [readme.md](../readme.md)。
+常用参数见 [包说明](../readme.md)；完整 launch 参数以 `detection_bbox.launch.py --show-args` 为准。

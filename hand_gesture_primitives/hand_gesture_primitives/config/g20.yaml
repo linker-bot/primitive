@@ -1,0 +1,365 @@
+# LinkerHand G20 关节配置
+# 机械结构与 L20/L25 同族：16 主动 + 5 被动指尖（指尖随指中）。
+#
+# 两套对外表示：
+#   1) SDK / 手-only native：本文件 16 维命令向量（尖部在 [11:16)），无独立 mid 通道
+#   2) 整机 l25_urdf：ros2_control / 示教 UI 走 L25 native25（含 mid；tip 耦合只读）
+#      launch 传 g20_joint_order:=l25_urdf；teach_panel 自动切 L25 布局
+#
+# SDK 布局:
+#   [0-4]   指根弯曲
+#   [5-9]   侧摆
+#   [10]    拇指旋转
+#   [11-15] 指尖弯曲（被动随中节时由中节驱动，SDK 仍占通道）
+
+hand_joint: G20
+num_joints: 16
+
+joint_names:
+  - thumb_base
+  - index_base
+  - middle_base
+  - ring_base
+  - pinky_base
+  - thumb_abd
+  - index_abd
+  - middle_abd
+  - ring_abd
+  - pinky_abd
+  - thumb_rot
+  - thumb_tip
+  - index_tip
+  - middle_tip
+  - ring_tip
+  - pinky_tip
+
+# O20 内部索引 → G20 硬件索引
+# tip: O20[15-19] → G20[11-15]
+from_o20:
+  0:  {to: 0,  invert: true}
+  1:  {to: 1,  invert: true}
+  2:  {to: 2,  invert: true}
+  3:  {to: 3,  invert: true}
+  4:  {to: 4,  invert: true}
+  5:  {to: 5,  invert: true}
+  6:  {to: 6,  invert: false}
+  7:  {to: 7,  invert: false}
+  8:  {to: 8,  invert: false}
+  9:  {to: 9,  invert: false}
+  10: {to: 10, invert: true}
+  15: {to: 11, invert: true}
+  16: {to: 12, invert: true}
+  17: {to: 13, invert: true}
+  18: {to: 14, invert: true}
+  19: {to: 15, invert: true}
+
+from_semantic:
+  thumb_mcp_flex: { joint: thumb_base, invert: true }
+  thumb_mcp_abd: { joint: thumb_abd, invert: true }
+  thumb_dip: { joint: thumb_tip, invert: true }
+  thumb_rot: { joint: thumb_rot, invert: true }
+  index_mcp_flex: { joint: index_base, invert: true }
+  index_mcp_abd: { joint: index_abd, invert: false }
+  index_dip: { joint: index_tip, invert: true }
+  middle_mcp_flex: { joint: middle_base, invert: true }
+  middle_mcp_abd: { joint: middle_abd, invert: false }
+  middle_dip: { joint: middle_tip, invert: true }
+  ring_mcp_flex: { joint: ring_base, invert: true }
+  ring_mcp_abd: { joint: ring_abd, invert: false }
+  ring_dip: { joint: ring_tip, invert: true }
+  pinky_mcp_flex: { joint: pinky_base, invert: true }
+  pinky_mcp_abd: { joint: pinky_abd, invert: false }
+  pinky_dip: { joint: pinky_tip, invert: true }
+
+
+reserved:
+  indices: []
+  default: 0
+
+calibration: {}
+
+# FK：外观对齐 L20/L25，复用 l25 URDF 映射（尖部走 mcp/pip 槽）
+# fingertip / tip_offsets 与 l25.yaml 一致（整机 mesh 与 evo_work L25 官方 URDF）
+fk:
+  urdf_model: l25
+  base_link: hand_base_link
+  fingertip_links:
+    - thumb_distal
+    - index_distal
+    - middle_distal
+    - ring_distal
+    - pinky_distal
+  invert_joints: []
+  tip_offsets:
+    thumb_distal:  [0.003, 0.0, 0.020]
+    index_distal:  [0.010, 0.0, 0.015]
+    middle_distal: [0.010, 0.0, 0.015]
+    ring_distal:   [0.010, 0.0, 0.015]
+    pinky_distal:  [0.010, 0.0, 0.015]
+  o20_to_urdf_joint:
+    0:  thumb_cmc_pitch
+    1:  index_mcp_pitch
+    2:  middle_mcp_pitch
+    3:  ring_mcp_pitch
+    4:  pinky_mcp_pitch
+    5:  thumb_cmc_yaw
+    6:  index_mcp_roll
+    7:  middle_mcp_roll
+    8:  ring_mcp_roll
+    9:  pinky_mcp_roll
+    10: thumb_cmc_roll
+    15: thumb_mcp
+    16: index_pip
+    17: middle_pip
+    18: ring_pip
+    19: pinky_pip
+
+capabilities:
+  finger_abd: true
+  thumb_abd: true
+  thumb_rot: true
+  finger_tips: true
+  thumb_tip: true
+  finger_root2: false
+  vision_fk: true
+  touch: true
+  current: true
+
+primitives:
+  mode: allowlist
+  supported:
+    - init
+    - open
+    - release
+    - relax_grip
+    - named_pose
+    - fist
+    - pinch
+    - point
+    - ok_sign
+    - v_sign
+    - thumb_adduction_grip
+    - index_middle_adduction_grip
+    - tripod
+    - tripod_by_force
+    - ring
+    - middle_ring
+    - index_pinch
+    - middle_pinch
+    - parallel_extension
+    - index_ring_by_vision
+    - large_wrap_by_vision
+    - middle_ring_by_vision
+    - ring_by_vision
+    - small_warp_by_vision
+    - no_index_warp_by_vision
+    - hook_by_vision
+    - index_pinch_by_vision
+    - middle_pinch_by_vision
+    - tripod_by_vision
+    - palmar_by_vision
+    - parallel_extension_by_vision
+    - disk_by_vision
+    - index_flick
+    - index_middle_flick
+    - twist2digit
+    - twist3digit
+    - twist5digit
+  grasp_type_map:
+    precision: index_ring_by_vision
+    lateral: index_middle_adduction_grip
+    power: large_wrap_by_vision
+
+# 运动复用 O20/L25 族 semantic 目标；G20 无独立 BotClaw 标定，空 target → O20 builder
+gestures:
+  open:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 0
+        index_base: 0
+        middle_base: 0
+        ring_base: 0
+        pinky_base: 0
+        thumb_abd: 0
+        index_abd: 128
+        middle_abd: 128
+        ring_abd: 128
+        pinky_abd: 128
+        thumb_rot: 0
+        thumb_tip: 0
+        index_tip: 0
+        middle_tip: 0
+        ring_tip: 0
+        pinky_tip: 0
+    motion:
+      type: static
+      duration: 0.6
+
+  init:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 80
+        index_base: 80
+        middle_base: 80
+        ring_base: 80
+        pinky_base: 80
+        thumb_abd: 60
+        index_abd: 128
+        middle_abd: 128
+        ring_abd: 128
+        pinky_abd: 128
+        thumb_rot: 50
+        thumb_tip: 60
+        index_tip: 60
+        middle_tip: 60
+        ring_tip: 60
+        pinky_tip: 60
+    motion:
+      type: static
+      duration: 0.8
+
+  fist:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 60
+        index_base: 255
+        middle_base: 255
+        ring_base: 255
+        pinky_base: 255
+        thumb_abd: 200
+        index_abd: 128
+        middle_abd: 128
+        ring_abd: 128
+        pinky_abd: 128
+        thumb_rot: 230
+        thumb_tip: 255
+        index_tip: 255
+        middle_tip: 255
+        ring_tip: 255
+        pinky_tip: 255
+    motion:
+      type: phased_pose
+      phase1: 0.5
+      phase2: 0.4
+      phase3: 0.4
+      phase4: 0.4
+    joints:
+      hold: [0, 5, 10, 15]
+
+  release:
+    motion:
+      type: static
+      duration: 0.6
+
+  relax_grip:
+    motion:
+      type: relax_grip
+      duration: 0.6
+      hold_duration: 0.3
+      grip_duration: 0.4
+
+  # 下列可规划原语：空 target → O20 builder（PlanGesture / 出厂预设）
+  pinch:
+    angles:
+      space: semantic_o20
+      target: {}
+    motion:
+      type: static
+      duration: 0.5
+
+  index_pinch:
+    angles:
+      space: semantic_o20
+      target: {}
+    motion:
+      type: static
+      duration: 0.5
+
+  middle_pinch:
+    angles:
+      space: semantic_o20
+      target: {}
+    motion:
+      type: static
+      duration: 0.5
+
+  grasp_ready:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 120
+        index_base: 100
+        middle_base: 120
+        ring_base: 100
+        pinky_base: 100
+        thumb_abd: 100
+        index_abd: 128
+        middle_abd: 128
+        ring_abd: 128
+        pinky_abd: 128
+        thumb_rot: 80
+        thumb_tip: 40
+        index_tip: 80
+        middle_tip: 100
+        ring_tip: 100
+        pinky_tip: 100
+    motion:
+      type: static
+      duration: 0.8
+
+  point:
+    angles:
+      space: semantic_o20
+      target: {}
+    motion:
+      type: static
+      duration: 0.6
+
+  ok_sign:
+    angles:
+      space: semantic_o20
+      target: {}
+    motion:
+      type: static
+      duration: 0.6
+
+  v_sign:
+    angles:
+      space: semantic_o20
+      target: {}
+    motion:
+      type: static
+      duration: 0.6
+
+  parallel_extension:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 120
+        index_base: 235
+        middle_base: 235
+        ring_base: 235
+        pinky_base: 235
+        thumb_abd: 235
+        index_abd: 193
+        middle_abd: 150
+        ring_abd: 105
+        pinky_abd: 45
+        thumb_rot: 245
+    motion:
+      type: static
+      duration: 0.6
+
+  tripod:
+    stages:
+      prep: 0.5
+      close: 0.5
+      pause: 0.0
+  tripod_by_force:
+    contact:
+      fingers: [thumb, index, middle]
+      feedback_source: auto
+      require_feedback: false

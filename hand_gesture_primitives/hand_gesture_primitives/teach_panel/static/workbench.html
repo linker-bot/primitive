@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>手势原语工作台</title><link rel="stylesheet" href="/static/workbench.css?v=0.2.2-final"></head>
+<body>
+<header><div><small>HAND GESTURE PRIMITIVES</small><h1>手势原语工作台</h1></div><div class="connection"><span id="connection">连接中…</span><a id="legacy-link" href="/">返回示教面板</a></div></header>
+<main>
+  <section class="toolbar card" aria-label="手势控制">
+    <label>机械手<select id="side" aria-label="手势侧别"></select></label>
+    <span id="backend" class="muted"></span>
+    <label class="speed">手势速度 <input id="speed" aria-label="手势速度倍率" type="number" min="0.25" max="3" step="0.05" value="1"> ×</label>
+    <button id="stop" class="danger">停止手势</button><button id="refresh">刷新原语库</button>
+  </section>
+  <p id="notice" role="status" class="notice" hidden></p>
+  <p id="pause" class="notice warn" hidden>编辑期间动作输入已暂停。关闭所有编辑器后需显式恢复。 <button id="resume">恢复控制</button></p>
+  <p id="readonly" class="notice" hidden>只读观察：可编辑和保存姿态，不发送动作。</p>
+  <div class="columns">
+    <section class="card" aria-label="手势原语面板">
+      <div class="section-heading"><h2>手势原语</h2><button id="new-pose">新建原语</button></div>
+      <div class="tabs" role="tablist" aria-label="原语分类"><button role="tab" data-group="default" aria-selected="true">默认原语</button><button role="tab" data-group="perception" aria-selected="false">带感知原语</button><button role="tab" data-group="custom" aria-selected="false">自定义原语</button></div>
+      <div class="search"><input id="search" type="search" aria-label="搜索手势原语" placeholder="搜索名称或说明"><label><input id="available" type="checkbox">仅可用</label><button id="clear-filter" hidden>清除筛选</button></div>
+      <p id="filter-state" class="muted" role="status"></p>
+      <div id="catalog" class="gesture-grid" role="tabpanel"></div>
+    </section>
+    <aside>
+      <section class="card" aria-label="执行状态"><h2>执行状态</h2><strong id="active">待命</strong><p id="runtime" class="muted"></p><progress id="progress" aria-label="手势整体进度" max="1" value="0"></progress><p id="settle" class="muted"></p></section>
+      <section class="card" aria-label="原语菜单"><h2>原语菜单</h2><p class="muted">菜单顺序按手型和侧别保存。数字键 1–9 可执行菜单项。</p><ol id="menu"></ol><div class="row"><select id="menu-add" aria-label="加入菜单的原语"></select><button id="add-menu">加入</button></div><button id="save-menu">应用菜单</button></section>
+      <section class="card" aria-label="姿态迁移"><h2>姿态迁移</h2><p class="muted">仅导入当前手型和侧别。</p><div class="row"><button id="export">导出姿态包</button><button id="import">导入姿态包</button><button id="factory">导入出厂预设</button></div><label>冲突策略<select id="import-strategy"><option value="skip">跳过已有</option><option value="overwrite">覆盖</option><option value="rename">重命名</option></select></label><input id="bundle-file" type="file" accept=".json,application/json" hidden></section>
+    </aside>
+  </div>
+</main>
+<dialog id="editor" aria-labelledby="editor-title">
+  <div class="section-heading"><div><small id="editor-hand"></small><h2 id="editor-title">自定义原语</h2></div><button id="close-editor">关闭</button></div>
+  <p class="muted">拖动仅驱动编辑的关节；切换帧和保存不会驱动机械手。读取当前手姿可将反馈写入草稿。</p>
+  <label class="row"><input id="follow" type="checkbox">实时跟随</label>
+  <p id="editor-message" role="status" class="notice" hidden></p>
+  <fieldset id="edit-fields">
+    <div class="fields"><label>原语名称<input id="pose-name" maxlength="64" placeholder="my_grasp"></label><label>说明<input id="pose-description" maxlength="2000"></label></div>
+    <div class="section-heading"><h3>关键帧</h3><div class="row"><button id="add-frame" type="button">添加帧</button><button id="copy-frame" type="button">复制当前帧</button></div></div>
+    <div id="frames" class="tabs" aria-label="关键帧选择"></div>
+    <div class="fields"><label>帧名称<input id="frame-name" maxlength="64"></label><label>到达此帧的时长（秒）<input id="duration" type="number" min="0.2" max="60" step="0.1"></label></div>
+    <div class="row"><button id="frame-up" type="button">前移</button><button id="frame-down" type="button">后移</button><button id="frame-delete" type="button">删除当前帧</button><button id="capture" type="button">读取当前手姿</button></div>
+    <div id="joints"></div>
+  </fieldset>
+  <p id="draft-warning" class="notice warn" hidden></p>
+  <div class="row footer"><button id="preview-frame">试播当前帧</button><button id="preview-all">试播整个动作</button><button id="editor-stop" class="danger">停止</button><button id="save-as">另存为</button><button id="delete-pose" class="danger">删除原语</button><button id="save-pose" class="primary">保存原语</button></div>
+  <label>预览进度<input id="scrub" type="range" min="0" max="1" step="0.005" value="0" aria-label="预览进度"></label>
+</dialog>
+<script src="/static/workbench.js?v=0.2.2-final"></script>
+</body></html>

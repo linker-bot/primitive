@@ -21,6 +21,15 @@ from_o20:
   3:  {to: 4, invert: true}   # ring_base
   4:  {to: 5, invert: true}   # pinky_base
 
+from_semantic:
+  thumb_mcp_flex: { joint: thumb_cmc_pitch, invert: true }
+  thumb_mcp_abd: { joint: thumb_cmc_yaw, invert: true }
+  index_mcp_flex: { joint: index_mcp_pitch, invert: true }
+  middle_mcp_flex: { joint: middle_mcp_pitch, invert: true }
+  ring_mcp_flex: { joint: ring_mcp_pitch, invert: true }
+  pinky_mcp_flex: { joint: pinky_mcp_pitch, invert: true }
+
+
 reserved:
   indices: []
   default: 255
@@ -57,9 +66,12 @@ primitives:
     - index_pinch
     - middle_pinch
     - tripod
+    - tripod_by_force
+    - large_wrap
     - point
     - ok_sign
     - v_sign
+    - hammer_grip
     - thumb_adduction_grip
     - ring
     - middle_ring
@@ -77,6 +89,7 @@ primitives:
     - palmar_by_vision
     - parallel_extension_by_vision
     - disk_by_vision
+    - named_pose
   unsupported: []
   grasp_type_map:
     precision: middle_ring
@@ -86,10 +99,8 @@ primitives:
 fk:
   urdf_model: o6
   base_link: lh_hand_base_link
-  # URDF 正方向与 O20 semantic 相反的关节 (semantic↑=屈曲)
-  # 四指 MCP 与 URDF 一致; 仅拇弯 pitch 需反转
-  invert_joints:
-    - lh_thumb_cmc_pitch
+  # O6 官方 URDF 的主动关节均为 0=张开、正角度=屈曲，与 O20 semantic 一致。
+  invert_joints: []
   fingertip_links:
     - lh_thumb_distal
     - lh_index_distal
@@ -116,8 +127,7 @@ fk:
   side_overrides:
     right:
       base_link: rh_hand_base_link
-      invert_joints:
-        - rh_thumb_cmc_pitch
+      invert_joints: []
       fingertip_links:
         - rh_thumb_distal
         - rh_index_distal
@@ -142,6 +152,22 @@ fk:
 # 手势参数（硬件量纲；原语内部经 invert 映射为 O20 semantic）
 # ---------------------------------------------------------------------------
 gestures:
+  # O6 握锤：硬件关节顺序见文件顶部。
+  # prep 使用 O6 驱动默认速度 200；speeds 仅用于 close 第二阶段。
+  # speeds 由 10Hz 原语控制循环解释为 0-255 位置单位/秒。
+  hammer_grip:
+    angles:
+      space: hardware
+      initial: [100.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+      target: [23.53, 96.08, 9.80, 11.76, 15.69, 11.76]
+    motion:
+      type: two_stage_speed
+      speeds: [50, 50, 50, 100, 100, 50]
+      # close 可直接下发：未到 initial 时先继续 prep，到位后再闭合。
+      ready_tolerance: 5.0
+      ready_frames: 3
+      ready_timeout: 2.0
+
   thumb_adduction_grip:
     angles:
       space: hardware
@@ -282,10 +308,10 @@ gestures:
       preshape_duration: 0.5
       settle_frames: 10
     contact:
-      contact_delta_torque_pct: 70
-      finger_step: 8                # 对齐 O20 精细步进
+      contact_delta_torque_pct: 30   # O6 空载弯曲力矩可达 30%，需更大阈值避免误触
+      finger_step: 8                # 每 tick 增量（按 10Hz 标定；随 control_rate 自动缩放）
       thumb_step: 8
-      hold_safe_torque_pct: 90
+      hold_safe_torque_pct: 80
     steps:
       - name: close_middle
         groups:
@@ -312,6 +338,40 @@ gestures:
     motion:
       type: static
       duration: 0.5
+    stages:
+      prep: 0.5
+      close: 0.5
+      pause: 0.0
+
+  tripod_by_force:
+    contact:
+      fingers: [thumb, index, middle]
+      # O6 motor_torque 空载常 60~80%，不用力矩 Δ；有压感才停指
+      feedback_source: tactile
+      require_feedback: false
+
+  large_wrap:
+    angles:
+      space: hardware
+      prep:
+        thumb_cmc_pitch: 255  # 拇指完全张开
+        thumb_cmc_yaw: 0      # 沿用 L6 large_wrap
+        index_mcp_pitch: 200  # 四指参考 init
+        middle_mcp_pitch: 200
+        ring_mcp_pitch: 200
+        pinky_mcp_pitch: 200
+      close:
+        thumb_cmc_pitch: 0    # 五个屈曲关节完全弯曲
+        index_mcp_pitch: 0
+        middle_mcp_pitch: 0
+        ring_mcp_pitch: 0
+        pinky_mcp_pitch: 0
+    motion:
+      type: large_wrap_two_stage
+      phase1: 0.5
+      pause_duration: 1.0
+      phase2: 0.5
+      thumb_delay: 0.2
 
   point:
     angles:
@@ -391,7 +451,7 @@ gestures:
       space: hardware
       prep:
         thumb_cmc_pitch: 200
-        thumb_cmc_yaw: 95
+        thumb_cmc_yaw: 160
         index_mcp_pitch: 90
         middle_mcp_pitch: 90
         ring_mcp_pitch: 255
@@ -401,10 +461,10 @@ gestures:
       preshape_duration: 0.5
       settle_frames: 10
     contact:
-      contact_delta_torque_pct: 70
+      contact_delta_torque_pct: 30
       finger_step: 8
       thumb_step: 8
-      hold_safe_torque_pct: 90
+      hold_safe_torque_pct: 80
     steps:
       - name: close_fingers
         groups:
@@ -426,9 +486,9 @@ gestures:
       space: hardware
       prep:
         thumb_cmc_pitch: 200
-        thumb_cmc_yaw: 25
+        thumb_cmc_yaw: 170
         index_mcp_pitch: 255
-        middle_mcp_pitch: 220
+        middle_mcp_pitch: 100
         ring_mcp_pitch: 255
         pinky_mcp_pitch: 255
     motion:
@@ -436,10 +496,10 @@ gestures:
       preshape_duration: 0.5
       settle_frames: 10
     contact:
-      contact_delta_torque_pct: 70
+      contact_delta_torque_pct: 30
       finger_step: 8
       thumb_step: 8
-      hold_safe_torque_pct: 90
+      hold_safe_torque_pct: 80
     steps:
       - name: close_middle
         groups:
@@ -465,8 +525,8 @@ gestures:
         thumb_cmc_yaw: 50    # → semantic 205，对齐无视觉版 tripod
         index_mcp_pitch: 165
         middle_mcp_pitch: 165
-        ring_mcp_pitch: 0
-        pinky_mcp_pitch: 0
+        ring_mcp_pitch: 255   # tripod 仅拇/食/中参与，无名指完全张开
+        pinky_mcp_pitch: 255  # 小指完全张开
       close:
         thumb_cmc_pitch: 75     # → semantic 180，对齐无视觉版 tripod 捏合位
         index_mcp_pitch: 115    # → semantic 140
@@ -504,9 +564,9 @@ gestures:
       preshape_duration: 0.5
       settle_frames: 10
     contact:
-      contact_delta_torque_pct: 70
+      contact_delta_torque_pct: 30
       finger_step: 8
-      hold_safe_torque_pct: 90
+      hold_safe_torque_pct: 80
     steps:
       - name: close_fingers
         groups:
@@ -538,10 +598,10 @@ gestures:
       preshape_duration: 0.5
       settle_frames: 10
     contact:
-      contact_delta_torque_pct: 70
+      contact_delta_torque_pct: 30
       finger_step: 8
       thumb_step: 8
-      hold_safe_torque_pct: 90
+      hold_safe_torque_pct: 80
     steps:
       - name: close_fingers
         groups:
@@ -579,10 +639,10 @@ gestures:
       preshape_duration: 0.5
       settle_frames: 10
     contact:
-      contact_delta_torque_pct: 70
+      contact_delta_torque_pct: 30
       finger_step: 8
       thumb_step: 8
-      hold_safe_torque_pct: 90
+      hold_safe_torque_pct: 80
     steps:
       - name: close_fingers
         groups:
@@ -617,10 +677,10 @@ gestures:
       preshape_duration: 0.5
       settle_frames: 10
     contact:
-      contact_delta_torque_pct: 70
+      contact_delta_torque_pct: 30
       finger_step: 8
       thumb_step: 8
-      hold_safe_torque_pct: 90
+      hold_safe_torque_pct: 80
     steps:
       - name: close_fingers
         groups:
@@ -700,7 +760,6 @@ gestures:
       all_joints: [0, 1, 2, 3, 4]    # 五指 flex 渐进，和 O20 一致
       all_maxs: [255, 255, 255, 255, 255]
       rate: 25.0
-      rate: 25.0
     contact:
       fingers: [0, 1, 2, 3, 4]
 
@@ -719,10 +778,10 @@ gestures:
       preshape_duration: 0.5
       settle_frames: 10
     contact:
-      contact_delta_torque_pct: 70
+      contact_delta_torque_pct: 30
       finger_step: 8
       thumb_step: 8
-      hold_safe_torque_pct: 90
+      hold_safe_torque_pct: 80
     steps:
       - name: close_fingers
         groups:

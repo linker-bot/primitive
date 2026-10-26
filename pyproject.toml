@@ -1,0 +1,19 @@
+[tool.ruff]
+line-length = 99
+target-version = "py312"
+# 第三方 / vendored 代码保留上游风格：
+#   third_party/  — Grounded-SAM-2 等视觉模型源码
+#   sensors/      — Orbbec 等相机 SDK
+extend-exclude = [
+  "third_party",
+  "sensors",
+  "**/*_pb2.py",
+  "**/*_pb2_grpc.py",
+]
+
+[tool.ruff.lint]
+# 一期门禁：基础错误 + pyflakes + import 排序（机械、安全）。
+select = ["E", "F", "I"]
+ignore = [
+  "E501",  # 行长交 ruff format 托管
+]

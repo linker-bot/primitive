@@ -11,45 +11,69 @@ from typing import List
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from ..angle_bridge import AngleUnits
+from ..gesture_params import load_static_params_for_ctx
 from ..primitive_base import (
-    HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
-    lerp_angles, ABD_NEUTRAL,
+    HandGesturePrimitive,
+    PrimitiveContext,
+    PrimitiveResult,
+    lerp_angles,
+    sync_pip_from_dip,
 )
-from ..gesture_params import load_static_gesture_params
+from ..semantic_30 import SEMANTIC_30_IDX, l25_compat_remap_s30, s30_pose_from_channels
 
 REACH_THRESHOLD = 0.15
 PALM_FORWARD_MIN = 0.02
 PALM_FORWARD_MAX = 0.15
 
-# 最终目标: 四指C弧 + 拇指最大限度侧摆对齐中指握住
-DISK_ANGLES = [
-    255,        # [0]  thumb_base: 最大限度弯曲 (255=120°)
-    140,        # [1]  index_base: C弧 (~99°)
-    140,        # [2]  middle_base: C弧
-    140,        # [3]  ring_base: C弧 (~99°)
-    140,        # [4]  pinky_base: C弧 (~99°)
-    255,        # [5]  thumb_abd: 最大限度侧摆 (255=180°) — 对齐中指位置
-    ABD_NEUTRAL,
-    ABD_NEUTRAL,
-    ABD_NEUTRAL,
-    ABD_NEUTRAL,
-    255,        # [10] thumb_rot: 最大限度旋转 (255=130°)
-    0, 0, 0, 0,
-    255,        # [15] thumb_tip: 最大限度弯曲 (255=150°)
-    130,        # [16] index_tip: C弧 (~92°)
-    130,        # [17] middle_tip: C弧 (~92°)
-    130,        # [18] ring_tip: C弧 (~92°)
-    130,        # [19] pinky_tip: C弧 (~92°)
-]
+_I = SEMANTIC_30_IDX
 
-# 拇指所有关节
-THUMB_INDICES = [0, 5, 10, 15]          # base, abd, rot, tip
-# 拇指弯曲关节 (除去abd), 最后阶段才合拢
-THUMB_FLEX_INDICES = [0, 10, 15]         # base, rot, tip
+# 最终目标: 四指C弧 + 拇指最大限度侧摆对齐中指握住（S30）
+# pip 默认 0（与历史 O20 rsv 一致）；O30 root2 由 from_semantic mask 消化
+DISK_ANGLES = s30_pose_from_channels(
+    {
+        "thumb_mcp_flex": 255,
+        "index_mcp_flex": 140,
+        "middle_mcp_flex": 140,
+        "ring_mcp_flex": 140,
+        "pinky_mcp_flex": 140,
+        "thumb_mcp_abd": 255,
+        "thumb_rot": 255,
+        "thumb_dip": 255,
+        "index_dip": 130,
+        "middle_dip": 130,
+        "ring_dip": 130,
+        "pinky_dip": 130,
+    },
+)
 
-PHASE1_DURATION = 0.4   # 拇指侧摆先过去定位
-PHASE2_DURATION = 0.5   # 四指弯成C弧
-PHASE3_DURATION = 0.5   # 拇指弯曲合拢握住
+DISK_ANGLES_L25 = l25_compat_remap_s30(DISK_ANGLES)
+
+# 拇指通道
+_THUMB_ABD = _I["thumb_mcp_abd"]
+_THUMB_FLEX = (_I["thumb_mcp_flex"], _I["thumb_rot"], _I["thumb_dip"])
+_FINGER_MCP = (
+    _I["index_mcp_flex"],
+    _I["middle_mcp_flex"],
+    _I["ring_mcp_flex"],
+    _I["pinky_mcp_flex"],
+)
+_FINGER_PIP = (
+    _I["index_pip"],
+    _I["middle_pip"],
+    _I["ring_pip"],
+    _I["pinky_pip"],
+)
+_FINGER_DIP = (
+    _I["index_dip"],
+    _I["middle_dip"],
+    _I["ring_dip"],
+    _I["pinky_dip"],
+)
+
+PHASE1_DURATION = 0.4  # 拇指侧摆先过去定位
+PHASE2_DURATION = 0.5  # 四指弯成C弧
+PHASE3_DURATION = 0.5  # 拇指弯曲合拢握住
 
 
 class DiskByVision(HandGesturePrimitive):
@@ -66,67 +90,69 @@ class DiskByVision(HandGesturePrimitive):
         return "disk_by_vision"
 
     def on_enter(self, current_angles: List[float]) -> None:
+        # 阶段目标在 compute 内经 AngleUnits.pose 现算，避免 on_enter 无 ctx 时写错量纲
         super().on_enter(current_angles)
 
-        # P1目标: 只有thumb_abd侧摆过去，其余全保持起始
-        self._p1_target = list(self._start_angles)
-        self._p1_target[5] = DISK_ANGLES[5]  # thumb_abd = 255
-
-        # P2目标: 四指C弧到位 + thumb_abd保持255, thumb_flex仍起始
-        self._p2_target = list(DISK_ANGLES)
-        for i in THUMB_FLEX_INDICES:
-            self._p2_target[i] = self._start_angles[i]
+    def _phase_targets(
+        self, u: AngleUnits, start: List[float], raw_final: List[float]
+    ) -> tuple[List[float], List[float], List[float]]:
+        final = u.pose(sync_pip_from_dip(raw_final))
+        p1 = list(start)
+        p1[_THUMB_ABD] = final[_THUMB_ABD]
+        p2 = list(final)
+        for i in _THUMB_FLEX:
+            p2[i] = start[i]
+        return p1, p2, final
 
     def compute(
         self, current_angles: List[float], elapsed: float, ctx: PrimitiveContext
     ) -> PrimitiveResult:
-        if ctx.hand_type in ("o6", "l6"):
-            params = load_static_gesture_params(ctx.hand_type, self.name)
-            target = list(params.target_angles)
-            # P1: 仅 thumb_abd[5] 侧摆定位
-            p1_target = list(self._start_angles)
-            p1_target[5] = target[5]
-            # P2: 四指 [1,2,3,4] 弯成C弧
-            p2_target = list(p1_target)
-            for i in (1, 2, 3, 4):
-                p2_target[i] = target[i]
-            t1 = PHASE1_DURATION
-            t2 = t1 + PHASE2_DURATION
-            t3 = t2 + PHASE3_DURATION
-            if elapsed < t1:
-                return self._move(lerp_angles(self._start_angles, p1_target, elapsed / t1))
-            elif elapsed < t2:
-                return self._move(lerp_angles(p1_target, p2_target, (elapsed - t1) / PHASE2_DURATION))
-            elif elapsed < t3:
-                return self._move(lerp_angles(p2_target, target, (elapsed - t2) / PHASE3_DURATION))
-            return self._move(target)
+        u = AngleUnits(ctx)
+        if ctx.hand_type in ("o6", "l6", "l25", "o30"):
+            from ..semantic_30 import SEMANTIC_30_IDX, as_semantic_30
 
-        if ctx.hand_type == "l25":
-            params = load_static_gesture_params("l25", self.name)
-            target = list(params.target_angles)
-            p1_target = list(self._start_angles)
-            p1_target[5] = target[5]
+            params = load_static_params_for_ctx(ctx.hand_type, self.name, ctx)
+            target = as_semantic_30(params.target_angles)
+            start = as_semantic_30(self._start_angles)
+            p1_target = list(start)
+            p1_target[SEMANTIC_30_IDX["thumb_mcp_abd"]] = target[SEMANTIC_30_IDX["thumb_mcp_abd"]]
             p2_target = list(p1_target)
-            for i in (1, 2, 3, 4):
-                p2_target[i] = target[i]
-            for i in (16, 17, 18, 19):
+            for ch in (
+                "index_mcp_flex",
+                "middle_mcp_flex",
+                "ring_mcp_flex",
+                "pinky_mcp_flex",
+                "index_pip",
+                "middle_pip",
+                "ring_pip",
+                "pinky_pip",
+                "index_dip",
+                "middle_dip",
+                "ring_dip",
+                "pinky_dip",
+            ):
+                i = SEMANTIC_30_IDX[ch]
                 p2_target[i] = target[i]
             t1 = PHASE1_DURATION
             t2 = t1 + PHASE2_DURATION
             t3 = t2 + PHASE3_DURATION
             if elapsed < t1:
-                return self._move(lerp_angles(self._start_angles, p1_target, elapsed / t1))
+                return self._move(lerp_angles(start, p1_target, elapsed / t1), space=u.space)
             elif elapsed < t2:
-                return self._move(lerp_angles(p1_target, p2_target, (elapsed - t1) / PHASE2_DURATION))
+                return self._move(
+                    lerp_angles(p1_target, p2_target, (elapsed - t1) / PHASE2_DURATION),
+                    space=u.space,
+                )
             elif elapsed < t3:
-                return self._move(lerp_angles(p2_target, target, (elapsed - t2) / PHASE3_DURATION))
-            return self._move(target)
+                return self._move(
+                    lerp_angles(p2_target, target, (elapsed - t2) / PHASE3_DURATION),
+                    space=u.space,
+                )
+            return self._move(list(target), space=u.space)
 
         if ctx.tcp_pose is None:
             return self._hold("缺少 tcp_pose")
 
-        # 无 object_pose 时跳过可达性检查
-        # (GraspGate 已完成三判定)
         if ctx.object_pose is not None:
             tcp_to_obj = ctx.object_pose.position - ctx.tcp_pose.position
             tcp_dist = float(np.linalg.norm(tcp_to_obj))
@@ -142,20 +168,19 @@ class DiskByVision(HandGesturePrimitive):
                 if tcp_dist > REACH_THRESHOLD:
                     return self._hold("TCP到物体距离过远")
 
+        p1_target, p2_target, final_target = self._phase_targets(
+            u, self._start_angles, DISK_ANGLES
+        )
         if elapsed < PHASE1_DURATION:
-            # P1: 拇指侧摆先定位
             t = elapsed / PHASE1_DURATION
-            return self._move(lerp_angles(self._start_angles, self._p1_target, t))
+            return self._move(lerp_angles(self._start_angles, p1_target, t), space=u.space)
         elif elapsed < PHASE1_DURATION + PHASE2_DURATION:
-            # P2: 四指弯C弧
             t = (elapsed - PHASE1_DURATION) / PHASE2_DURATION
-            return self._move(lerp_angles(self._p1_target, self._p2_target, t))
+            return self._move(lerp_angles(p1_target, p2_target, t), space=u.space)
         elif elapsed < PHASE1_DURATION + PHASE2_DURATION + PHASE3_DURATION:
-            # P3: 拇指合拢握住
             t = (elapsed - PHASE1_DURATION - PHASE2_DURATION) / PHASE3_DURATION
-            return self._move(lerp_angles(self._p2_target, DISK_ANGLES, t))
-        else:
-            return self._move(list(DISK_ANGLES))
+            return self._move(lerp_angles(p2_target, final_target, t), space=u.space)
+        return self._move(list(final_target), space=u.space)
 
     @property
     def done(self) -> bool:

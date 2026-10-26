@@ -1,0 +1,12 @@
+string primitive
+float32 sample_period
+---
+bool success
+string message
+string[] joint_names
+float64[] time_s
+float64[] positions
+uint32 point_count
+bool nominal_only
+# 多段 Pose：各段名称与起始点索引（JSON 编码 [{name, start_index}]）；静态原语为空
+string segments_json

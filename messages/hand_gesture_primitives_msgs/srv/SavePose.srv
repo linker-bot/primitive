@@ -1,0 +1,14 @@
+string name
+float32 duration
+string description
+# 空数组表示服务端用缓存的最近 hand_state
+float32[] positions
+string hand_type
+string hand_side
+# 非空则追加/替换该关键帧（upsert_pose_keyframe）；空则整姿态 upsert_pose
+string keyframe
+# hardware | semantic_v3 | semantic_o20；空则服务端默认 semantic_v3
+string space
+---
+bool success
+string message

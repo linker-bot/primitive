@@ -6,7 +6,7 @@ from typing import Any, List, Optional, Sequence
 def normalize_label(label: str) -> str:
     """小写、去首尾空白、去掉末尾标点。"""
     s = label.lower().strip()
-    while s and s[-1] in '.,;:!?':
+    while s and s[-1] in ".,;:!?":
         s = s[:-1].strip()
     return s
 
@@ -34,7 +34,7 @@ def labels_match(target: str, candidate: str) -> bool:
 
 def select_best_bbox(
     boxes: Sequence[Any],
-    target_label: str = '',
+    target_label: str = "",
     target_instance_id: Optional[int] = None,
 ) -> Optional[Any]:
     """按 instance_id / label 过滤后取最佳 bbox。"""

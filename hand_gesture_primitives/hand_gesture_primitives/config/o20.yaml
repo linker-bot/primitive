@@ -45,6 +45,25 @@ from_o20:
   18: {to: 18, invert: false}
   19: {to: 19, invert: false}
 
+from_semantic:
+  thumb_mcp_flex: { joint: thumb_base, invert: false }
+  thumb_mcp_abd: { joint: thumb_abd, invert: false }
+  thumb_dip: { joint: thumb_tip, invert: false }
+  thumb_rot: { joint: thumb_rot, invert: false }
+  index_mcp_flex: { joint: index_base, invert: false }
+  index_mcp_abd: { joint: index_abd, invert: false }
+  index_dip: { joint: index_tip, invert: false }
+  middle_mcp_flex: { joint: middle_base, invert: false }
+  middle_mcp_abd: { joint: middle_abd, invert: false }
+  middle_dip: { joint: middle_tip, invert: false }
+  ring_mcp_flex: { joint: ring_base, invert: false }
+  ring_mcp_abd: { joint: ring_abd, invert: false }
+  ring_dip: { joint: ring_tip, invert: false }
+  pinky_mcp_flex: { joint: pinky_base, invert: false }
+  pinky_mcp_abd: { joint: pinky_abd, invert: false }
+  pinky_dip: { joint: pinky_tip, invert: false }
+
+
 reserved:
   indices: [11, 12, 13, 14]
   default: 0
@@ -142,6 +161,7 @@ primitives:
     - thumb_adduction_grip
     - index_middle_adduction_grip
     - tripod
+    - tripod_by_force
     - ring
     - middle_ring
     - index_pinch
@@ -160,6 +180,7 @@ primitives:
     - palmar_by_vision
     - parallel_extension_by_vision
     - disk_by_vision
+    - named_pose
   grasp_type_map:
     precision: index_ring_by_vision
     lateral: index_middle_adduction_grip
@@ -291,3 +312,110 @@ gestures:
       duration: 0.6
       hold_duration: 0.3
       grip_duration: 0.4
+
+  # --------------------------------------------------------------------------
+  # 下列可规划原语：空 target → gesture_params builder（PlanGesture / 出厂预设）
+  # --------------------------------------------------------------------------
+  pinch:
+    angles:
+      space: semantic_o20
+      target: {}
+    motion:
+      type: static
+      duration: 0.5
+
+  index_pinch:
+    angles:
+      space: semantic_o20
+      target: {}
+    motion:
+      type: static
+      duration: 0.5
+
+  middle_pinch:
+    angles:
+      space: semantic_o20
+      target: {}
+    motion:
+      type: static
+      duration: 0.5
+
+  grasp_ready:
+    angles:
+      space: semantic_o20
+      target:
+        # O20 半包络待命（无独立 BotClaw 标定；与 init 区分：拇指更开、指根略弯）
+        thumb_base: 120
+        index_base: 100
+        middle_base: 120
+        ring_base: 100
+        pinky_base: 100
+        thumb_abd: 100
+        index_abd: 128
+        middle_abd: 128
+        ring_abd: 128
+        pinky_abd: 128
+        thumb_rot: 80
+        thumb_tip: 40
+        index_tip: 80
+        middle_tip: 100
+        ring_tip: 100
+        pinky_tip: 100
+    motion:
+      type: static
+      duration: 0.8
+
+  point:
+    angles:
+      space: semantic_o20
+      target: {}
+    motion:
+      type: static
+      duration: 0.6
+
+  ok_sign:
+    angles:
+      space: semantic_o20
+      target: {}
+    motion:
+      type: static
+      duration: 0.6
+
+  v_sign:
+    angles:
+      space: semantic_o20
+      target: {}
+    motion:
+      type: static
+      duration: 0.6
+
+  parallel_extension:
+    angles:
+      space: semantic_o20
+      target:
+        thumb_base: 120
+        index_base: 235
+        middle_base: 235
+        ring_base: 235
+        pinky_base: 235
+        thumb_abd: 235
+        index_abd: 193
+        middle_abd: 150
+        ring_abd: 105
+        pinky_abd: 45
+        thumb_rot: 245
+    motion:
+      type: static
+      duration: 0.6
+
+  tripod:
+    stages:
+      prep: 0.5
+      close: 0.5
+      pause: 0.0
+
+  tripod_by_force:
+    contact:
+      fingers: [thumb, index, middle]
+      feedback_source: auto
+      require_feedback: false

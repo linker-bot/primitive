@@ -26,3 +26,10 @@ perception/config/calib_results/T_*.npy
 # OS
 .DS_Store
 Thumbs.db
+
+# Python packaging and test artifacts
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+dist/

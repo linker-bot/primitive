@@ -4,9 +4,9 @@ from typing import Optional
 
 # 与 perception classify_grasp_type 输出一致
 GRASP_TYPE_TO_PRIMITIVE = {
-    'precision': 'index_ring_by_vision',
-    'lateral': 'index_middle_adduction_grip',
-    'power': 'large_wrap_by_vision',
+    "precision": "index_ring_by_vision",
+    "lateral": "index_middle_adduction_grip",
+    "power": "large_wrap_by_vision",
 }
 
 

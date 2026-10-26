@@ -1,0 +1,8 @@
+string hand_type
+string hand_side
+string[] names
+string output_path
+---
+bool success
+string message
+uint32 count

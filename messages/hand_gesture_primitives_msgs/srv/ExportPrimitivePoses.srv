@@ -1,0 +1,12 @@
+string hand_type
+string hand_side
+string[] primitives
+string name_prefix
+bool write_library
+string output_path
+bool overwrite
+---
+bool success
+string message
+uint32 count
+string[] names

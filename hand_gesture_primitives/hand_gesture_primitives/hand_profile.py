@@ -9,10 +9,10 @@ from typing import Dict, List, Optional, Set
 import yaml
 
 from .hand_config import (
-    HandConfig,
-    HAND_TYPE_ALIASES,
-    _find_config_path,
     _CONFIG_DIR,
+    HAND_TYPE_ALIASES,
+    HandConfig,
+    _find_config_path,
     resolve_hand_config_key,
 )
 from .primitive_catalog import (
@@ -24,10 +24,10 @@ from .primitive_catalog import (
     CAP_THUMB_ABD,
     CAP_THUMB_ROT,
     CAP_THUMB_TIP,
-    CAP_VISION_FK,
     CAP_TOUCH,
-    missing_capabilities,
+    CAP_VISION_FK,
     catalog_entry,
+    missing_capabilities,
 )
 from .primitives import PRIMITIVE_REGISTRY
 
@@ -82,9 +82,7 @@ class HandProfile:
         self._gestures: dict = dict(raw.get("gestures") or {})
 
         caps = raw.get("capabilities") or {}
-        self._capabilities: Set[str] = {
-            k for k, v in caps.items() if v and k != "description"
-        }
+        self._capabilities: Set[str] = {k for k, v in caps.items() if v and k != "description"}
 
         self._supported_set: Optional[Set[str]] = None
         self._validate_config()
@@ -110,32 +108,30 @@ class HandProfile:
         return self._config_path
 
     def _validate_config(self) -> None:
-        unknown = [
-            n for n in self._supported_explicit
-            if n not in PRIMITIVE_REGISTRY
-        ]
+        unknown = [n for n in self._supported_explicit if n not in PRIMITIVE_REGISTRY]
         if unknown:
-            raise ValueError(
-                f"{self._hand_joint} config 含未注册原语: {unknown}")
+            raise ValueError(f"{self._hand_joint} config 含未注册原语: {unknown}")
 
         for alias_target in self._aliases.values():
             if alias_target not in PRIMITIVE_REGISTRY:
-                raise ValueError(
-                    f"{self._hand_joint} alias 目标未注册: {alias_target}")
+                raise ValueError(f"{self._hand_joint} alias 目标未注册: {alias_target}")
 
         for grasp, prim in self._grasp_type_map.items():
             if prim and prim not in PRIMITIVE_REGISTRY:
-                raise ValueError(
-                    f"{self._hand_joint} grasp_type_map[{grasp!r}] "
-                    f"未注册: {prim}")
+                raise ValueError(f"{self._hand_joint} grasp_type_map[{grasp!r}] 未注册: {prim}")
 
     def _compute_supported(self) -> Set[str]:
-        if self._supported_set is not None:
+        registry_names = frozenset(PRIMITIVE_REGISTRY)
+        if (
+            self._supported_set is not None
+            and getattr(self, "_supported_registry_names", None) == registry_names
+        ):
             return self._supported_set
 
         if self._mode == "capability":
             supported = {
-                name for name in PRIMITIVE_REGISTRY
+                name
+                for name in PRIMITIVE_REGISTRY
                 if not missing_capabilities(name, self.capabilities)
             }
         else:
@@ -146,6 +142,7 @@ class HandProfile:
 
         supported -= self._unsupported
         self._supported_set = supported
+        self._supported_registry_names = registry_names
         return supported
 
     def resolve_primitive_name(self, name: str) -> str:
@@ -168,15 +165,11 @@ class HandProfile:
         if resolved not in self._compute_supported():
             missing = missing_capabilities(resolved, self.capabilities)
             if missing:
-                return (
-                    f"capability_missing:{resolved}:"
-                    f"{','.join(sorted(missing))}")
+                return f"capability_missing:{resolved}:{','.join(sorted(missing))}"
             return f"not_in_allowlist:{resolved}"
         cap_missing = missing_capabilities(resolved, self.capabilities)
         if cap_missing:
-            return (
-                f"capability_warning:{resolved}:"
-                f"{','.join(sorted(cap_missing))}")
+            return f"capability_warning:{resolved}:{','.join(sorted(cap_missing))}"
         return ""
 
     def reject_user_message(self, name: str) -> str:
@@ -247,8 +240,8 @@ def list_configured_hand_joints() -> List[str]:
             names.add(os.path.splitext(base)[0])
     try:
         from ament_index_python.packages import get_package_share_directory
-        share_cfg = os.path.join(
-            get_package_share_directory("hand_gesture_primitives"), "config")
+
+        share_cfg = os.path.join(get_package_share_directory("hand_gesture_primitives"), "config")
         for path in glob.glob(os.path.join(share_cfg, "*.yaml")):
             base = os.path.basename(path)
             if base == _CONTACT_CONFIG:
@@ -289,8 +282,7 @@ def format_reject_message(
             )
         elif prim == "ring":
             msg += (
-                " 该原语依赖独立指尖与指侧摆力控包络，"
-                "O6 为 6 DOF 欠驱动手，无法实现 O20 版 ring。"
+                " 该原语依赖独立指尖与指侧摆力控包络，O6 为 6 DOF 欠驱动手，无法实现 O20 版 ring。"
             )
         alt = _PRIMITIVE_ALTERNATIVES.get(hand_type.lower(), {}).get(prim)
         if alt:
@@ -300,10 +292,7 @@ def format_reject_message(
     if reason.startswith("not_in_allowlist:"):
         prim = reason.split(":", 1)[1]
         alt = _PRIMITIVE_ALTERNATIVES.get(hand_type.lower(), {}).get(prim)
-        msg = (
-            f"{hand_label}{dof_hint} 未启用原语 '{prim}'"
-            f"（不在本手型 allowlist 中）。"
-        )
+        msg = f"{hand_label}{dof_hint} 未启用原语 '{prim}'（不在本手型 allowlist 中）。"
         if alt:
             msg += f" 建议使用: {alt}。"
         return msg
@@ -346,9 +335,9 @@ def load_hand_profile(hand_type_or_joint: str) -> HandProfile:
     available = {n.lower(): n for n in list_configured_hand_joints()}
     normalized = resolve_hand_config_key(key)
     if normalized not in available:
-        aliases = ", ".join(
-            f"{a}→{t}" for a, t in sorted(HAND_TYPE_ALIASES.items()))
+        aliases = ", ".join(f"{a}→{t}" for a, t in sorted(HAND_TYPE_ALIASES.items()))
         hint = f"；别名: {aliases}" if aliases else ""
         raise FileNotFoundError(
-            f"未找到手型配置 {key!r}，可用: {sorted(available.values())}{hint}")
+            f"未找到手型配置 {key!r}，可用: {sorted(available.values())}{hint}"
+        )
     return HandProfile(available[normalized])

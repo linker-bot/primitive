@@ -5,26 +5,52 @@ engine 字段控制行为:
   - "finger_adduction": FingerAdductionEngine (L25 新行为, YAML 驱动)
 
 典型场景：夹持香烟、笔杆、细棒等细长物体 (食中指像筷子一样夹住)。
+
+硬编码姿态仍按 legacy 0～255 标定；运行时经 AngleUnits 转 semantic_rad。
+ABD_NEUTRAL±spread / 255 clamp → u.abd_neutral / u.close_max / u.value。
 """
 
 from typing import List, Optional, Tuple
 
 import numpy as np
 
+from ..angle_bridge import AngleUnits
 from ..contact_detection import FingerContactTracker
 from ..gesture_engine import FingerAdductionEngine
 from ..gesture_params import (
     FingerAdductionParams,
+    finger_adduction_params_as_semantic_rad,
     load_finger_adduction_params,
 )
 from ..primitive_base import (
-    HandGesturePrimitive, PrimitiveContext, PrimitiveResult,
-    lerp_angles, ABD_NEUTRAL, parse_grasp_phase,
+    ABD_NEUTRAL,
+    HandGesturePrimitive,
+    PrimitiveContext,
+    PrimitiveResult,
+    lerp_angles,
+    parse_grasp_phase,
 )
+from ..semantic_30 import SEMANTIC_30_IDX
 
 # ============================================================================
-# 旧引擎常量 (O20 硬编码, engine 未填时使用)
+# 旧引擎常量 (O20 硬编码 legacy255, engine 未填时使用)
 # ============================================================================
+
+# S30 槽位（旧 O20 硬编码经 u.pose 投影后再写入）
+_IDX_ABD = SEMANTIC_30_IDX["index_mcp_abd"]
+_MID_ABD = SEMANTIC_30_IDX["middle_mcp_abd"]
+_THUMB_ABD = SEMANTIC_30_IDX["thumb_mcp_abd"]
+_THUMB_ROT = SEMANTIC_30_IDX["thumb_rot"]
+_THUMB_FLEX_INDICES = [
+    SEMANTIC_30_IDX["thumb_mcp_flex"],
+    SEMANTIC_30_IDX["thumb_dip"],
+]
+_THUMB_ALL_INDICES = [
+    SEMANTIC_30_IDX["thumb_mcp_flex"],
+    _THUMB_ABD,
+    _THUMB_ROT,
+    SEMANTIC_30_IDX["thumb_dip"],
+]
 
 # 准备姿态: 无名/小指握拢，拇指让位到尺侧
 RING_PINKY_CLOSE = 255
@@ -33,39 +59,40 @@ THUMB_ABD_PREP = 255
 THUMB_ROT_PREP = 255
 THUMB_TIP_PREP = 255
 
-THUMB_ALL_INDICES = [0, 5, 10, 15]
-THUMB_ABD_INDEX = 5
-THUMB_ROT_INDEX = 10
-THUMB_FLEX_INDICES = [0, 15]  # P2 末步: base + tip 闭合
+THUMB_ABD_INDEX = _THUMB_ABD
+THUMB_ROT_INDEX = _THUMB_ROT
 
-# 食中指侧摆：v_sign 方向为张开 (先 prep)，并拢为闭合目标
+# 食中指侧摆：v_sign 方向为张开 (先 prep)，并拢为闭合目标（legacy255）
 INDEX_ABD_SPREAD = 255
 MIDDLE_ABD_SPREAD = 0
 
 # 默认目标角度 (无感知数据时的 fallback) — 最终并拢夹持姿态
 INDEX_MIDDLE_ADDUCTION_ANGLES = [
     THUMB_BASE_PREP,  # [0]  thumb_base: P2-3 闭合
-    120,        # [1]  index_base: 中度弯曲提供夹持角度
-    120,        # [2]  middle_base: 同食指对称
+    120,  # [1]  index_base: 中度弯曲提供夹持角度
+    120,  # [2]  middle_base: 同食指对称
     RING_PINKY_CLOSE,  # [3]  ring_base: 握拢
     RING_PINKY_CLOSE,  # [4]  pinky_base: 握拢
     THUMB_ABD_PREP,  # [5]  thumb_abd: P2-1 内扣
-    96,         # [6]  index_abd: 并拢 (<128, 与 spread 255 相反)
-    160,        # [7]  middle_abd: 并拢 (>128, 与 spread 0 相反)
+    96,  # [6]  index_abd: 并拢 (<128, 与 spread 255 相反)
+    160,  # [7]  middle_abd: 并拢 (>128, 与 spread 0 相反)
     ABD_NEUTRAL,  # [8]  ring_abd: 中立
     ABD_NEUTRAL,  # [9]  pinky_abd: 中立
     THUMB_ROT_PREP,  # [10] thumb_rot: P2-2 旋转
-    0, 0, 0, 0,  # [11-14] rsv
+    0,
+    0,
+    0,
+    0,  # [11-14] rsv
     THUMB_TIP_PREP,  # [15] thumb_tip: P2-3 闭合
-    100,        # [16] index_tip: 中度弯曲形成夹持面
-    100,        # [17] middle_tip: 同食指
+    100,  # [16] index_tip: 中度弯曲形成夹持面
+    100,  # [17] middle_tip: 同食指
     RING_PINKY_CLOSE,  # [18] ring_tip: 握拢
     RING_PINKY_CLOSE,  # [19] pinky_tip: 握拢
 ]
 
 PHASE1_DURATION = 0.35  # 无名/小指握拢 + 食中指弯曲
 PHASE2_ABD_DURATION = 0.20  # P2-1: abd 内扣
-PHASE2_ROT_DURATION = 0.20   # P2-2: rot 旋转
+PHASE2_ROT_DURATION = 0.20  # P2-2: rot 旋转
 PHASE2_FLEX_DURATION = 0.20  # P2-3: base + tip 闭合
 PHASE2_DURATION = PHASE2_ABD_DURATION + PHASE2_ROT_DURATION + PHASE2_FLEX_DURATION
 PHASE3_DURATION = 0.35  # 食中指侧摆张开 (prep)
@@ -84,41 +111,57 @@ PROGRESSIVE_CLOSE_MAX = 200.0
 # 旧引擎辅助函数
 # ============================================================================
 
-def _close_abd_from_diameter(d_mm: float) -> Tuple[int, int]:
+
+def _close_abd_from_diameter(d_mm: float, u: AngleUnits) -> Tuple[float, float]:
     """根据物体直径计算并拢时的食中指 abd 目标。"""
-    abd_offset = int(np.clip(40 - (d_mm - 3) * 2.5, 10, 40))
-    return ABD_NEUTRAL - abd_offset, ABD_NEUTRAL + abd_offset
+    abd_offset = float(np.clip(40 - (d_mm - 3) * 2.5, 10, 40))
+    return (
+        u.abd_neutral(_IDX_ABD) - u.step(_IDX_ABD, abd_offset),
+        u.abd_neutral(_MID_ABD) + u.step(_MID_ABD, abd_offset),
+    )
 
 
-def _spread_abd_from_diameter(d_mm: float) -> Tuple[int, int]:
+def _spread_abd_from_diameter(d_mm: float, u: AngleUnits) -> Tuple[float, float]:
     """根据物体直径计算 prep 张开幅度 (粗物体需更大开口)。"""
-    spread = int(np.clip(90 + (d_mm - 3) * 4.0, 90, 127))
-    return min(255, ABD_NEUTRAL + spread), max(0, ABD_NEUTRAL - spread)
+    spread = float(np.clip(90 + (d_mm - 3) * 4.0, 90, 127))
+    return (
+        min(u.close_max(_IDX_ABD), u.abd_neutral(_IDX_ABD) + u.step(_IDX_ABD, spread)),
+        max(u.value(_MID_ABD, 0.0), u.abd_neutral(_MID_ABD) - u.step(_MID_ABD, spread)),
+    )
 
 
-def _adaptive_index_middle_adduction_angles(object_size):
+def _default_spread_abd(u: AngleUnits) -> Tuple[float, float]:
+    """无感知时的默认张开 (legacy INDEX_ABD_SPREAD / MIDDLE_ABD_SPREAD)。"""
+    return (
+        u.value(_IDX_ABD, float(INDEX_ABD_SPREAD)),
+        u.value(_MID_ABD, float(MIDDLE_ABD_SPREAD)),
+    )
+
+
+def _adaptive_index_middle_adduction_angles(object_size, u: AngleUnits):
     """根据物体直径调整食中指侧向夹持开合量。
 
     侧捏主要关注物体最薄维度 (直径)。
     直径越大 → 并拢 abd 偏移越小、prep 张开越大。
     """
-    angles = list(INDEX_MIDDLE_ADDUCTION_ANGLES)
+    angles_255 = list(INDEX_MIDDLE_ADDUCTION_ANGLES)
     s = sorted(object_size)
     d_mm = s[0] * 1000.0  # 最薄维度 mm
 
-    angles[6], angles[7] = _close_abd_from_diameter(d_mm)
+    # 弯曲量仍按 legacy255 标定，整姿经 u.pose 一次换算
+    base_val = float(np.clip(140 - (d_mm - 3) * 3.0, 80, 140))
+    tip_val = float(np.clip(120 - (d_mm - 3) * 2.5, 60, 120))
+    angles_255[1] = angles_255[2] = base_val
+    angles_255[16] = angles_255[17] = tip_val
+    angles_255[0] = THUMB_BASE_PREP
+    angles_255[3] = angles_255[4] = RING_PINKY_CLOSE
+    angles_255[5] = THUMB_ABD_PREP
+    angles_255[10] = THUMB_ROT_PREP
+    angles_255[15] = THUMB_TIP_PREP
+    angles_255[18] = angles_255[19] = RING_PINKY_CLOSE
 
-    # 弯曲量: 细物体需要更多弯曲来包住
-    base_val = int(np.clip(140 - (d_mm - 3) * 3.0, 80, 140))
-    tip_val = int(np.clip(120 - (d_mm - 3) * 2.5, 60, 120))
-    angles[1] = angles[2] = base_val
-    angles[16] = angles[17] = tip_val
-    angles[0] = THUMB_BASE_PREP
-    angles[3] = angles[4] = RING_PINKY_CLOSE
-    angles[5] = THUMB_ABD_PREP
-    angles[10] = THUMB_ROT_PREP
-    angles[15] = THUMB_TIP_PREP
-    angles[18] = angles[19] = RING_PINKY_CLOSE
+    angles = u.pose(angles_255)
+    angles[_IDX_ABD], angles[_MID_ABD] = _close_abd_from_diameter(d_mm, u)
     return angles
 
 
@@ -126,13 +169,18 @@ def _adaptive_index_middle_adduction_angles(object_size):
 # 新引擎辅助
 # ============================================================================
 
+
 def _params(ctx: PrimitiveContext) -> FingerAdductionParams:
-    return load_finger_adduction_params(ctx.hand_type)
+    p = load_finger_adduction_params(ctx.hand_type)
+    if ctx.radian_converter is not None:
+        return finger_adduction_params_as_semantic_rad(p, ctx.radian_converter)
+    return p
 
 
 # ============================================================================
 # 原语类
 # ============================================================================
+
 
 class IndexMiddleAdductionGrip(HandGesturePrimitive):
     """食中指侧向夹持。
@@ -177,7 +225,7 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
 
     def _ensure_engine(self, ctx: PrimitiveContext) -> FingerAdductionEngine:
         if self._engine is None or self._engine_hand_type != ctx.hand_type:
-            p = _params(ctx)
+            p = _params(ctx)  # 已含 semantic_rad 换算（有 Converter 时）
             self._engine = FingerAdductionEngine(
                 pose_target=list(p.prep_angles),
                 joint_a=p.joint_a,
@@ -199,15 +247,20 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
     # 旧引擎 (硬编码 4 阶段)
     # ------------------------------------------------------------------
 
-    def _update_spread_abd(self, object_size: Optional[np.ndarray]) -> None:
+    def _update_spread_abd(self, object_size: Optional[np.ndarray], u: AngleUnits) -> None:
         if object_size is None:
-            self._spread_abd = (INDEX_ABD_SPREAD, MIDDLE_ABD_SPREAD)
+            self._spread_abd = _default_spread_abd(u)
             return
         d_mm = sorted(object_size)[0] * 1000.0
-        self._spread_abd = _spread_abd_from_diameter(d_mm)
+        self._spread_abd = _spread_abd_from_diameter(d_mm, u)
 
-    def _update_target(self, ctx: PrimitiveContext, elapsed: float,
-                       current_output: List[float]) -> None:
+    def _update_target(
+        self,
+        ctx: PrimitiveContext,
+        elapsed: float,
+        current_output: List[float],
+        u: AngleUnits,
+    ) -> None:
         if self._size_locked:
             return
         if ctx.object_size is None:
@@ -216,8 +269,8 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
             if np.linalg.norm(ctx.object_size - self._last_size) < SIZE_CHANGE_THRESHOLD:
                 return
         self._last_size = ctx.object_size.copy()
-        new_target = _adaptive_index_middle_adduction_angles(ctx.object_size)
-        self._update_spread_abd(ctx.object_size)
+        new_target = _adaptive_index_middle_adduction_angles(ctx.object_size, u)
+        self._update_spread_abd(ctx.object_size, u)
         self._blend_from = list(current_output)
         self._blend_start_elapsed = elapsed
         self._target = new_target
@@ -233,10 +286,10 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
 
         # P1: 无名/小指 + 食中指弯曲；拇指与食中指 abd 保持起始
         phase1_target = list(target)
-        for i in THUMB_ALL_INDICES:
+        for i in _THUMB_ALL_INDICES:
             phase1_target[i] = self._start_angles[i]
-        phase1_target[6] = self._start_angles[6]
-        phase1_target[7] = self._start_angles[7]
+        phase1_target[_IDX_ABD] = self._start_angles[_IDX_ABD]
+        phase1_target[_MID_ABD] = self._start_angles[_MID_ABD]
 
         if elapsed < t1_end:
             t = elapsed / PHASE1_DURATION
@@ -260,7 +313,7 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
 
         # P2-3: thumb_base + tip 闭合
         phase2_flex_target = list(phase2_rot_target)
-        for i in THUMB_FLEX_INDICES:
+        for i in _THUMB_FLEX_INDICES:
             phase2_flex_target[i] = target[i]
 
         if elapsed < t2_end:
@@ -269,8 +322,8 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
 
         # P3: 食中指 abd 侧摆张开 (prep)
         phase3_target = list(phase2_flex_target)
-        phase3_target[6] = self._spread_abd[0]
-        phase3_target[7] = self._spread_abd[1]
+        phase3_target[_IDX_ABD] = self._spread_abd[0]
+        phase3_target[_MID_ABD] = self._spread_abd[1]
 
         if elapsed < t3_end:
             t = (elapsed - t2_end) / PHASE3_DURATION
@@ -286,8 +339,8 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
     def _compute_close(self, elapsed: float) -> List[float]:
         """close 阶段: 仅 P4 食中指 abd 并拢 (从 on_enter 时的关节态插值)。"""
         close_to = list(self._start_angles)
-        close_to[6] = self._target[6]
-        close_to[7] = self._target[7]
+        close_to[_IDX_ABD] = self._target[_IDX_ABD]
+        close_to[_MID_ABD] = self._target[_MID_ABD]
         if elapsed < PHASE4_DURATION:
             t = elapsed / PHASE4_DURATION
             return lerp_angles(self._start_angles, close_to, t)
@@ -308,15 +361,17 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
     def _select_engine(self, ctx: PrimitiveContext) -> None:
         """首次 compute 时根据 ctx.hand_type 决定用哪个引擎。"""
         p = _params(ctx)
-        self._use_new_engine = (p.engine == "finger_adduction")
+        self._use_new_engine = p.engine == "finger_adduction"
+        self._units = AngleUnits(ctx)
 
         if self._use_new_engine:
             self._engine: Optional[FingerAdductionEngine] = None
             self._engine_hand_type: str = ""
         else:
+            u = self._units
             # 旧引擎初始化
-            self._target: List[float] = list(INDEX_MIDDLE_ADDUCTION_ANGLES)
-            self._spread_abd: Tuple[int, int] = (INDEX_ABD_SPREAD, MIDDLE_ABD_SPREAD)
+            self._target: List[float] = u.pose(INDEX_MIDDLE_ADDUCTION_ANGLES)
+            self._spread_abd: Tuple[float, float] = _default_spread_abd(u)
             self._last_size: Optional[np.ndarray] = None
             self._blend_from: Optional[List[float]] = None
             self._blend_start_elapsed: float = 0.0
@@ -335,13 +390,16 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
         if not self._engine_selected:
             self._select_engine(ctx)
 
+        u = AngleUnits(ctx)
+        self._units = u
+
         if self._use_new_engine:
             engine = self._ensure_engine(ctx)
             raw = engine.compute(current_angles, elapsed, ctx)
-            return self._move(raw)
+            return self._move(raw, space=u.space)
 
         # --- 旧引擎逻辑 ---
-        self._update_spread_abd(ctx.object_size)
+        self._update_spread_abd(ctx.object_size, u)
 
         if self._phase == "close":
             compute_fn = self._compute_close
@@ -355,7 +413,7 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
             phase4_done_at = PREP_END + PHASE4_DURATION
 
         raw = compute_fn(motion_elapsed)
-        self._update_target(ctx, elapsed, raw)
+        self._update_target(ctx, elapsed, raw, u)
         raw = compute_fn(motion_elapsed)
 
         if self._blend_from is not None:
@@ -369,7 +427,7 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
         if self._phase == "prep":
             self.grasp_state = "ready" if elapsed >= PREP_END else "approaching"
             self._last_elapsed = elapsed
-            return self._move(raw)
+            return self._move(raw, space=u.space)
 
         if elapsed > close_phase_start:
             if not self._size_locked:
@@ -378,14 +436,14 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
 
             if self._frozen_pose is not None:
                 self.grasp_state = "contact"
-                return self._move(self._frozen_pose)
+                return self._move(self._frozen_pose, space=u.space)
 
             has_contact = self._check_contact(ctx)
             if has_contact:
                 freeze = self._progressive_angles if self._progressive_angles is not None else raw
                 self._frozen_pose = list(freeze)
                 self.grasp_state = "contact"
-                return self._move(self._frozen_pose)
+                return self._move(self._frozen_pose, space=u.space)
 
             if elapsed >= phase4_done_at:
                 self.grasp_state = "progressive"
@@ -393,16 +451,20 @@ class IndexMiddleAdductionGrip(HandGesturePrimitive):
                 self._last_elapsed = elapsed
                 if self._progressive_angles is None:
                     self._progressive_angles = list(raw)
-                increment = PROGRESSIVE_CLOSE_RATE * dt
-                self._progressive_angles[6] = max(
-                    0, self._progressive_angles[6] - increment)
-                self._progressive_angles[7] = min(
-                    PROGRESSIVE_CLOSE_MAX, self._progressive_angles[7] + increment)
-                return self._move(list(self._progressive_angles))
+                inc6 = u.step(_IDX_ABD, PROGRESSIVE_CLOSE_RATE) * dt
+                inc7 = u.step(_MID_ABD, PROGRESSIVE_CLOSE_RATE) * dt
+                self._progressive_angles[_IDX_ABD] = max(
+                    u.value(_IDX_ABD, 0.0), self._progressive_angles[_IDX_ABD] - inc6
+                )
+                self._progressive_angles[_MID_ABD] = min(
+                    u.close_max(_MID_ABD, PROGRESSIVE_CLOSE_MAX),
+                    self._progressive_angles[_MID_ABD] + inc7,
+                )
+                return self._move(list(self._progressive_angles), space=u.space)
 
         self.grasp_state = "approaching"
         self._last_elapsed = elapsed
-        return self._move(raw)
+        return self._move(raw, space=u.space)
 
     @property
     def name(self) -> str:

@@ -1,0 +1,21 @@
+Hand gesture primitives and workbench
+
+The hand_gesture_primitives implementation, including the independently
+developed LinkerHand workbench modules and their associated tests, is
+released under the MIT License. See LICENSE for the license text and
+copyright notice.
+
+Components with separate licenses retain their existing terms:
+
+- The bundled O6 right-hand URDF and mesh resources in data/urdf/o6/right
+  are licensed under Apache-2.0, as declared in their package.xml.
+  Installed gesture packages place these resources under
+  share/hand_gesture_primitives/urdf/o6/right.
+- The hand_force_msg package in messages/hand_force_msg is separately
+  licensed under Apache-2.0, as declared in its package.xml.
+- Vendored dependencies and device SDKs retain the licenses and notices
+  supplied in their respective directories.
+
+See LICENSE.apache-2.0 for the Apache-2.0 license text. The gesture package
+metadata lists MIT and Apache-2.0 because its distribution includes the
+O6 model resources; the independently developed workbench code uses MIT.

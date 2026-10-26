@@ -1,0 +1,1247 @@
+# LinkerHand O30 — 20 有效电机，HOP 协议（非 cpp-sdk LinkerHandApi）
+# 关节序 = HOP NAMES_EN / ros2_control / controllers_o30.yaml
+#
+# 主路径：from_semantic（S30 通道名 → HOP 关节，无中间投影）。
+# from_o20 保留供旧工具链兼容，运行时不走此路径。
+# pinky_* 协议名 ↔ little_* 硬件名仅在 from_semantic 改名。
+
+hand_joint: O30
+num_joints: 20
+semantic_version: 3
+
+joint_names:
+  - thumb_roll
+  - thumb_yaw
+  - index_yaw
+  - middle_yaw
+  - ring_yaw
+  - little_yaw
+  - thumb_root1
+  - index_root1
+  - middle_root1
+  - ring_root1
+  - little_root1
+  - index_root2
+  - middle_root2
+  - ring_root2
+  - little_root2
+  - thumb_tip
+  - index_tip
+  - middle_tip
+  - ring_tip
+  - little_tip
+
+# 兼容别名：O20 idx → HW idx（旧工具链 / 调试用，运行时不走此路径）
+from_o20:
+  0:  {to: 6,  invert: false}   # thumb_base → thumb_root1
+  1:  {to: 7,  invert: false}   # index_base → index_root1
+  2:  {to: 8,  invert: false}
+  3:  {to: 9,  invert: false}
+  4:  {to: 10, invert: false}   # pinky_base → little_root1
+  5:  {to: 1,  invert: false}   # thumb_abd → thumb_yaw
+  # 四指 yaw：HOP 物理方向与 S30/O20 语义（高=远离邻指成 V）相反
+  6:  {to: 2,  invert: true}    # index_abd → index_yaw
+  7:  {to: 3,  invert: true}
+  8:  {to: 4,  invert: true}
+  9:  {to: 5,  invert: true}
+  10: {to: 0,  invert: false}   # thumb_rot → thumb_roll
+  11: {to: 11, invert: false}   # rsv → index_root2
+  12: {to: 12, invert: false}
+  13: {to: 13, invert: false}
+  14: {to: 14, invert: false}
+  15: {to: 15, invert: false}   # tips 同序
+  16: {to: 16, invert: false}
+  17: {to: 17, invert: false}
+  18: {to: 18, invert: false}
+  19: {to: 19, invert: false}
+
+# 主路径：semantic_30 通道名 → HOP 关节（20 active channels）
+from_semantic:
+  thumb_mcp_flex:  { joint: thumb_root1,  invert: false }
+  thumb_mcp_abd:   { joint: thumb_yaw,    invert: false }
+  thumb_dip:       { joint: thumb_tip,    invert: false }
+  thumb_rot:       { joint: thumb_roll,   invert: false }
+  index_mcp_flex:  { joint: index_root1,  invert: false }
+  index_mcp_abd:   { joint: index_yaw,    invert: true }
+  index_pip:       { joint: index_root2,  invert: false }
+  index_dip:       { joint: index_tip,    invert: false }
+  middle_mcp_flex: { joint: middle_root1, invert: false }
+  middle_mcp_abd:  { joint: middle_yaw,   invert: true }
+  middle_pip:      { joint: middle_root2, invert: false }
+  middle_dip:      { joint: middle_tip,   invert: false }
+  ring_mcp_flex:   { joint: ring_root1,   invert: false }
+  ring_mcp_abd:    { joint: ring_yaw,     invert: true }
+  ring_pip:        { joint: ring_root2,   invert: false }
+  ring_dip:        { joint: ring_tip,     invert: false }
+  pinky_mcp_flex:  { joint: little_root1, invert: false }
+  pinky_mcp_abd:   { joint: little_yaw,   invert: true }
+  pinky_pip:       { joint: little_root2, invert: false }
+  pinky_dip:       { joint: little_tip,   invert: false }
+
+# 显式覆盖（其余由 capabilities 展开）
+channels:
+  thumb_pip: false
+  index_extra: false
+  middle_extra: false
+  ring_extra: false
+  pinky_extra: false
+  wrist_flex: false
+  wrist_deviation: false
+  wrist_pronation: false
+  palm_arch: false
+  reserved: false
+
+coupling:
+  thumb_pip: { mode: ignore }
+
+reserved:
+  indices: []
+  default: 0
+
+calibration: {}
+
+# FK：O30i 0803 mesh（evo_work/o30）；S30 通道直映 URDF 关节（含独立 PIP）
+fk:
+  urdf_model: o30
+  fold_pip_into_dip: false
+  base_link: hand_base_link
+  fingertip_links:
+    - thumb_distal
+    - index_distal
+    - middle_distal
+    - ring_distal
+    - pinky_distal
+  # 与 from_semantic 四指 abd invert / RadianConverter.inverted_indices 对齐
+  invert_joints:
+    - index_mcp_roll
+    - middle_mcp_roll
+    - ring_mcp_roll
+    - pinky_mcp_roll
+  tip_offsets:
+    thumb_distal:  [-0.003, 0.0, 0.027]
+    index_distal:  [0.006, 0.0, 0.030]
+    middle_distal: [0.006, 0.0, 0.030]
+    ring_distal:   [0.006, 0.0, 0.030]
+    pinky_distal:  [0.006, 0.0, 0.030]
+  semantic_to_urdf_joint:
+    thumb_mcp_flex:  thumb_mcp
+    thumb_mcp_abd:   thumb_cmc_yaw
+    thumb_rot:       thumb_cmc_roll
+    thumb_dip:       thumb_ip
+    index_mcp_flex:  index_mcp_pitch
+    index_mcp_abd:   index_mcp_roll
+    index_pip:       index_pip
+    index_dip:       index_dip
+    middle_mcp_flex: middle_mcp_pitch
+    middle_mcp_abd:  middle_mcp_roll
+    middle_pip:      middle_pip
+    middle_dip:      middle_dip
+    ring_mcp_flex:   ring_mcp_pitch
+    ring_mcp_abd:    ring_mcp_roll
+    ring_pip:        ring_pip
+    ring_dip:        ring_dip
+    pinky_mcp_flex:  pinky_mcp_pitch
+    pinky_mcp_abd:   pinky_mcp_roll
+    pinky_pip:       pinky_pip
+    pinky_dip:       pinky_dip
+
+capabilities:
+  finger_abd: true
+  thumb_abd: true
+  thumb_rot: true
+  finger_tips: true
+  thumb_tip: true
+  finger_root2: true
+  vision_fk: true
+  touch: false
+  current: true
+  motor_torque: true
+
+primitives:
+  mode: allowlist
+  supported:
+    - init
+    - open
+    - release
+    - relax_grip
+    - named_pose
+    - fist
+    - pinch
+    - point
+    - ok_sign
+    - v_sign
+    - grasp_ready
+    - index_pinch
+    - middle_pinch
+    - parallel_extension
+    - thumb_adduction_grip
+    - index_middle_adduction_grip
+    - tripod
+    - tripod_by_force
+    - ring
+    - middle_ring
+    - index_flick
+    - index_middle_flick
+    - twist2digit
+    - twist3digit
+    - twist5digit
+    - index_ring_by_vision
+    - large_wrap_by_vision
+    - middle_ring_by_vision
+    - ring_by_vision
+    - small_warp_by_vision
+    - no_index_warp_by_vision
+    - hook_by_vision
+    - index_pinch_by_vision
+    - middle_pinch_by_vision
+    - tripod_by_vision
+    - palmar_by_vision
+    - parallel_extension_by_vision
+    - disk_by_vision
+  unsupported: []
+  grasp_type_map:
+    precision: index_ring_by_vision
+    lateral: index_middle_adduction_grip
+    power: large_wrap_by_vision
+
+gestures:
+  open:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 0
+        index_mcp_flex: 0
+        middle_mcp_flex: 0
+        ring_mcp_flex: 0
+        pinky_mcp_flex: 0
+        thumb_mcp_abd: 0
+        index_mcp_abd: 128
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+        thumb_rot: 0
+        thumb_dip: 0
+        index_pip: 0
+        index_dip: 0
+        middle_pip: 0
+        middle_dip: 0
+        ring_pip: 0
+        ring_dip: 0
+        pinky_pip: 0
+        pinky_dip: 0
+    motion:
+      type: static
+      duration: 0.6
+
+  init:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 80
+        thumb_mcp_abd: 60
+        thumb_dip: 60
+        thumb_rot: 50
+        index_mcp_flex: 80
+        index_pip: 60
+        index_dip: 60
+        middle_mcp_flex: 80
+        middle_pip: 60
+        middle_dip: 60
+        ring_mcp_flex: 80
+        ring_pip: 60
+        ring_dip: 60
+        pinky_mcp_flex: 80
+        pinky_pip: 60
+        pinky_dip: 60
+    motion:
+      type: static
+      duration: 0.8
+
+  fist:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 60
+        thumb_mcp_abd: 200
+        thumb_dip: 255
+        thumb_rot: 230
+        index_mcp_flex: 255
+        index_pip: 255
+        index_dip: 255
+        middle_mcp_flex: 255
+        middle_pip: 255
+        middle_dip: 255
+        ring_mcp_flex: 255
+        ring_pip: 255
+        ring_dip: 255
+        pinky_mcp_flex: 255
+        pinky_pip: 255
+        pinky_dip: 255
+    motion:
+      type: phased_pose
+      phase1: 0.5
+      phase2: 0.4
+      phase3: 0.4
+      phase4: 0.4
+    joints:
+      # S30 下标：thumb_mcp_flex, thumb_mcp_abd, thumb_rot, thumb_dip
+      hold: [0, 1, 4, 3]
+
+  # O30 拇指 roll 满幅仅 ~35°：须顶满 rot + 加大 yaw，tip/PIP 深弯才能对指。
+  # 勿照搬 O20 pinch(180/130/200)——真机指尖合不上。
+  # FK 标定（O30 URDF）：拇–食尖距约 10mm
+  pinch:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 200
+        thumb_mcp_abd: 170
+        thumb_dip: 200
+        thumb_rot: 255
+        index_mcp_flex: 180
+        index_mcp_abd: 128
+        index_pip: 210
+        index_dip: 255
+        middle_mcp_flex: 0
+        middle_pip: 0
+        middle_dip: 0
+        ring_mcp_flex: 0
+        ring_pip: 0
+        ring_dip: 0
+        pinky_mcp_flex: 0
+        pinky_pip: 0
+        pinky_dip: 0
+    motion:
+      type: static
+      duration: 0.6
+
+  point:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 230
+        thumb_mcp_abd: 140
+        thumb_dip: 200
+        thumb_rot: 150
+        middle_mcp_flex: 255
+        middle_pip: 255
+        middle_dip: 255
+        ring_mcp_flex: 255
+        ring_pip: 255
+        ring_dip: 255
+        pinky_mcp_flex: 255
+        pinky_pip: 255
+        pinky_dip: 255
+    motion:
+      type: static
+      duration: 0.6
+
+  release:
+    motion:
+      type: static
+      duration: 0.6
+
+  # 仅 motion：relax→open / grip→fist（见 gesture_params._resolve_relax_grip_sub）
+  relax_grip:
+    relax: open
+    grip: fist
+    motion:
+      type: relax_grip
+      duration: 0.6
+      hold_duration: 0.3
+      grip_duration: 0.4
+
+  tripod_by_force:
+    contact:
+      fingers: [thumb, index, middle]
+      feedback_source: auto
+      require_feedback: false
+      freeze_tips: true
+
+  # C 桶静态 fallback（与 S30 通道表一致；无 YAML 时原语用内置表）
+  parallel_extension:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 120
+        index_mcp_flex: 235
+        middle_mcp_flex: 235
+        ring_mcp_flex: 235
+        pinky_mcp_flex: 235
+        index_pip: 235
+        middle_pip: 235
+        ring_pip: 235
+        pinky_pip: 235
+        index_dip: 235
+        middle_dip: 235
+        ring_dip: 235
+        pinky_dip: 235
+        thumb_mcp_abd: 235
+        index_mcp_abd: 193
+        middle_mcp_abd: 150
+        ring_mcp_abd: 105
+        pinky_mcp_abd: 45
+        thumb_rot: 245
+    motion:
+      type: static
+      duration: 0.6
+
+  # FK 标定：拇–食尖距约 10mm
+  index_pinch:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 200
+        index_mcp_flex: 150
+        middle_mcp_flex: 0
+        ring_mcp_flex: 0
+        pinky_mcp_flex: 0
+        thumb_mcp_abd: 155
+        index_mcp_abd: 128
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+        thumb_rot: 255
+        thumb_dip: 190
+        index_pip: 240
+        index_dip: 230
+        middle_pip: 0
+        middle_dip: 0
+        ring_pip: 0
+        ring_dip: 0
+        pinky_pip: 0
+        pinky_dip: 0
+    motion:
+      type: static
+      duration: 0.6
+
+  # FK 标定：拇–中尖距约 10mm
+  middle_pinch:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 150
+        index_mcp_flex: 0
+        middle_mcp_flex: 200
+        ring_mcp_flex: 0
+        pinky_mcp_flex: 0
+        thumb_mcp_abd: 230
+        index_mcp_abd: 200
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+        thumb_rot: 240
+        thumb_dip: 150
+        index_pip: 0
+        index_dip: 0
+        middle_pip: 180
+        middle_dip: 220
+        ring_pip: 0
+        ring_dip: 0
+        pinky_pip: 0
+        pinky_dip: 0
+    motion:
+      type: static
+      duration: 0.6
+
+  grasp_ready:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 120
+        index_mcp_flex: 100
+        middle_mcp_flex: 120
+        ring_mcp_flex: 100
+        pinky_mcp_flex: 100
+        thumb_mcp_abd: 100
+        index_mcp_abd: 128
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+        thumb_rot: 80
+        thumb_dip: 40
+        index_pip: 80
+        index_dip: 80
+        middle_pip: 100
+        middle_dip: 100
+        ring_pip: 100
+        ring_dip: 100
+        pinky_pip: 100
+        pinky_dip: 100
+    motion:
+      type: static
+      duration: 0.8
+
+  # FK 标定：拇–食/中尖距均约 10mm（三角支撑）
+  tripod:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 179
+        index_mcp_flex: 224
+        middle_mcp_flex: 170
+        ring_mcp_flex: 0
+        pinky_mcp_flex: 0
+        thumb_mcp_abd: 255
+        index_mcp_abd: 255
+        middle_mcp_abd: 135
+        ring_mcp_abd: 105
+        pinky_mcp_abd: 52
+        thumb_rot: 110
+        thumb_dip: 143
+        index_pip: 184
+        index_dip: 225
+        middle_pip: 220
+        middle_dip: 155
+        ring_pip: 0
+        ring_dip: 0
+        pinky_pip: 0
+        pinky_dip: 0
+    motion:
+      type: static
+      duration: 0.5
+    stages:
+      prep: 0.5
+      close: 0.5
+      pause: 0.0
+
+  # FK 标定：侧向夹拇–食约 10mm；P1 已接近接触，rot 再渐进到 160
+  thumb_adduction_grip:
+    engine: rot_progressive
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 80
+        thumb_mcp_abd: 210
+        thumb_rot: 114
+        thumb_dip: 148
+        index_mcp_flex: 200
+        middle_mcp_flex: 220
+        ring_mcp_flex: 220
+        pinky_mcp_flex: 220
+        index_mcp_abd: 128
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+        index_pip: 140
+        index_dip: 160
+        middle_pip: 170
+        middle_dip: 170
+        ring_pip: 170
+        ring_dip: 170
+        pinky_pip: 170
+        pinky_dip: 170
+    motion:
+      phase1: 0.35
+      phase2: 0.0
+      phase3: 0.0
+      phase4: 0.0
+    joints:
+      hold: []
+      flex: []
+      rot: 4
+    progressive:
+      abd: -1
+      flex: -1
+      abd_max: 160
+      flex_max: 255
+      rate: 20.0
+    contact:
+      fingers: [0, 1]
+
+  # FK 标定：P2 并拢后拇–食/中约 10mm；食中 abd 255/0 → 128/128
+  index_middle_adduction_grip:
+    engine: finger_adduction
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 93
+        thumb_mcp_abd: 205
+        thumb_rot: 193
+        thumb_dip: 81
+        index_mcp_flex: 172
+        middle_mcp_flex: 142
+        ring_mcp_flex: 255
+        pinky_mcp_flex: 255
+        index_mcp_abd: 255
+        middle_mcp_abd: 0
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+        index_pip: 156
+        index_dip: 209
+        middle_pip: 194
+        middle_dip: 160
+        ring_pip: 255
+        ring_dip: 255
+        pinky_pip: 255
+        pinky_dip: 255
+    thumb:
+      joints: [0, 1, 4, 3]
+      duration: 0.3
+    motion:
+      phase1: 0.5
+    adduction:
+      joint_a: 6
+      joint_b: 11
+      close_a: 128
+      close_b: 128
+      duration: 2.0
+    contact:
+      fingers: [1, 2]
+
+  # 与 index_pinch 对齐
+  index_pinch_by_vision:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 200
+        index_mcp_flex: 150
+        middle_mcp_flex: 0
+        ring_mcp_flex: 0
+        pinky_mcp_flex: 0
+        thumb_mcp_abd: 155
+        thumb_rot: 255
+        thumb_dip: 190
+        index_pip: 240
+        index_dip: 230
+        middle_pip: 0
+        middle_dip: 0
+        ring_pip: 0
+        ring_dip: 0
+        pinky_pip: 0
+        pinky_dip: 0
+    motion:
+      type: static
+      duration: 0.5
+
+  # 与 middle_pinch 对齐
+  middle_pinch_by_vision:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 150
+        index_mcp_flex: 0
+        middle_mcp_flex: 200
+        ring_mcp_flex: 0
+        pinky_mcp_flex: 0
+        thumb_mcp_abd: 230
+        index_mcp_abd: 200
+        thumb_rot: 240
+        thumb_dip: 150
+        index_pip: 0
+        index_dip: 0
+        middle_pip: 180
+        middle_dip: 220
+        ring_pip: 0
+        ring_dip: 0
+        pinky_pip: 0
+        pinky_dip: 0
+    motion:
+      type: static
+      duration: 0.5
+
+  parallel_extension_by_vision:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 120
+        index_mcp_flex: 235
+        middle_mcp_flex: 235
+        ring_mcp_flex: 235
+        pinky_mcp_flex: 235
+        index_pip: 235
+        middle_pip: 235
+        ring_pip: 235
+        pinky_pip: 235
+        index_dip: 235
+        middle_dip: 235
+        ring_dip: 235
+        pinky_dip: 235
+        thumb_mcp_abd: 235
+        index_mcp_abd: 193
+        middle_mcp_abd: 150
+        ring_mcp_abd: 105
+        pinky_mcp_abd: 45
+        thumb_rot: 245
+    motion:
+      type: static
+      duration: 0.6
+
+  ok_sign:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 160
+        thumb_mcp_abd: 170
+        thumb_dip: 230
+        thumb_rot: 255
+        index_mcp_flex: 160
+        index_pip: 200
+        index_dip: 220
+        middle_mcp_flex: 0
+        middle_pip: 0
+        middle_dip: 0
+        ring_mcp_flex: 0
+        ring_pip: 0
+        ring_dip: 0
+        pinky_mcp_flex: 0
+        pinky_pip: 0
+        pinky_dip: 0
+    motion:
+      type: static
+      duration: 0.6
+
+  v_sign:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 200
+        thumb_mcp_abd: 140
+        thumb_dip: 200
+        thumb_rot: 150
+        index_mcp_flex: 0
+        middle_mcp_flex: 0
+        ring_mcp_flex: 255
+        ring_pip: 255
+        ring_dip: 255
+        pinky_mcp_flex: 255
+        pinky_pip: 255
+        pinky_dip: 255
+        index_mcp_abd: 200
+        middle_mcp_abd: 60
+    motion:
+      type: static
+      duration: 0.5
+
+  # -----------------------------------------------------------------------
+  # ring 族 — sequential_force_close（O30 独立 PIP：闭合须含 *_pip / tip）
+  # -----------------------------------------------------------------------
+  ring:
+    angles:
+      space: semantic_v3
+      prep:
+        thumb_mcp_flex: 40
+        thumb_mcp_abd: 160
+        thumb_rot: 255
+        thumb_dip: 30
+        index_mcp_flex: 90
+        index_pip: 30
+        index_dip: 30
+        middle_mcp_flex: 90
+        middle_pip: 30
+        middle_dip: 30
+        ring_mcp_flex: 255
+        ring_pip: 255
+        ring_dip: 255
+        pinky_mcp_flex: 255
+        pinky_pip: 255
+        pinky_dip: 255
+        index_mcp_abd: 128
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta: 270
+      finger_step: 8
+      thumb_step: 8
+      hold_safe_current: 800
+    steps:
+      - name: close_fingers
+        groups:
+          - id: index
+            joints: [index_mcp_flex, index_pip, index_dip]
+            monitor: [index_root1, index_root2, index_tip]
+          - id: middle
+            joints: [middle_mcp_flex, middle_pip, middle_dip]
+            monitor: [middle_root1, middle_root2, middle_tip]
+      - name: close_thumb
+        step: 8
+        groups:
+          - id: thumb
+            joints: [thumb_mcp_flex, thumb_dip]
+            monitor: [thumb_root1, thumb_tip]
+
+  middle_ring:
+    angles:
+      space: semantic_v3
+      prep:
+        thumb_mcp_flex: 80
+        thumb_mcp_abd: 220
+        thumb_rot: 240
+        thumb_dip: 80
+        index_mcp_flex: 255
+        index_pip: 255
+        index_dip: 255
+        middle_mcp_flex: 100
+        middle_pip: 30
+        middle_dip: 30
+        ring_mcp_flex: 255
+        ring_pip: 255
+        ring_dip: 255
+        pinky_mcp_flex: 255
+        pinky_pip: 255
+        pinky_dip: 255
+        index_mcp_abd: 128
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta: 270
+      finger_step: 8
+      thumb_step: 8
+      hold_safe_current: 800
+    steps:
+      - name: close_middle
+        groups:
+          - id: middle
+            joints: [middle_mcp_flex, middle_pip, middle_dip]
+            monitor: [middle_root1, middle_root2, middle_tip]
+      - name: close_thumb
+        step: 8
+        groups:
+          - id: thumb
+            joints: [thumb_mcp_flex, thumb_dip]
+            monitor: [thumb_root1, thumb_tip]
+
+  ring_by_vision:
+    angles:
+      space: semantic_v3
+      prep:
+        thumb_mcp_flex: 40
+        thumb_mcp_abd: 160
+        thumb_rot: 255
+        thumb_dip: 30
+        index_mcp_flex: 90
+        index_pip: 30
+        index_dip: 30
+        middle_mcp_flex: 90
+        middle_pip: 30
+        middle_dip: 30
+        ring_mcp_flex: 255
+        ring_pip: 255
+        ring_dip: 255
+        pinky_mcp_flex: 255
+        pinky_pip: 255
+        pinky_dip: 255
+        index_mcp_abd: 128
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta: 270
+      finger_step: 8
+      thumb_step: 8
+      hold_safe_current: 800
+    steps:
+      - name: close_fingers
+        groups:
+          - id: index
+            joints: [index_mcp_flex, index_pip, index_dip]
+            monitor: [index_root1, index_root2, index_tip]
+          - id: middle
+            joints: [middle_mcp_flex, middle_pip, middle_dip]
+            monitor: [middle_root1, middle_root2, middle_tip]
+      - name: close_thumb
+        step: 8
+        groups:
+          - id: thumb
+            joints: [thumb_mcp_flex, thumb_dip]
+            monitor: [thumb_root1, thumb_tip]
+
+  middle_ring_by_vision:
+    angles:
+      space: semantic_v3
+      prep:
+        thumb_mcp_flex: 80
+        thumb_mcp_abd: 220
+        thumb_rot: 240
+        thumb_dip: 80
+        index_mcp_flex: 255
+        index_pip: 255
+        index_dip: 255
+        middle_mcp_flex: 100
+        middle_pip: 30
+        middle_dip: 30
+        ring_mcp_flex: 255
+        ring_pip: 255
+        ring_dip: 255
+        pinky_mcp_flex: 255
+        pinky_pip: 255
+        pinky_dip: 255
+        index_mcp_abd: 128
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta: 270
+      finger_step: 8
+      thumb_step: 8
+      hold_safe_current: 800
+    steps:
+      - name: close_middle
+        groups:
+          - id: middle
+            joints: [middle_mcp_flex, middle_pip, middle_dip]
+            monitor: [middle_root1, middle_root2, middle_tip]
+      - name: close_thumb
+        step: 8
+        groups:
+          - id: thumb
+            joints: [thumb_mcp_flex, thumb_dip]
+            monitor: [thumb_root1, thumb_tip]
+
+  # -----------------------------------------------------------------------
+  # vision SFCE — hook / warp / palmar / tripod（独立 PIP 闭合链）
+  # -----------------------------------------------------------------------
+  hook_by_vision:
+    angles:
+      space: semantic_v3
+      prep:
+        thumb_mcp_flex: 0
+        thumb_mcp_abd: 128
+        thumb_rot: 0
+        thumb_dip: 0
+        index_mcp_flex: 95
+        index_pip: 60
+        index_dip: 60
+        middle_mcp_flex: 95
+        middle_pip: 60
+        middle_dip: 60
+        ring_mcp_flex: 95
+        ring_pip: 60
+        ring_dip: 60
+        pinky_mcp_flex: 95
+        pinky_pip: 60
+        pinky_dip: 60
+        index_mcp_abd: 128
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta: 270
+      finger_step: 8
+      hold_safe_current: 800
+    steps:
+      - name: close_fingers
+        groups:
+          - id: index
+            joints: [index_mcp_flex, index_pip, index_dip]
+            monitor: [index_root1, index_root2, index_tip]
+          - id: middle
+            joints: [middle_mcp_flex, middle_pip, middle_dip]
+            monitor: [middle_root1, middle_root2, middle_tip]
+          - id: ring
+            joints: [ring_mcp_flex, ring_pip, ring_dip]
+            monitor: [ring_root1, ring_root2, ring_tip]
+          - id: pinky
+            joints: [pinky_mcp_flex, pinky_pip, pinky_dip]
+            monitor: [pinky_root1, pinky_root2, pinky_tip]
+
+  small_warp_by_vision:
+    angles:
+      space: semantic_v3
+      prep:
+        thumb_mcp_flex: 50
+        thumb_mcp_abd: 150
+        thumb_rot: 200
+        thumb_dip: 30
+        index_mcp_flex: 80
+        index_pip: 30
+        index_dip: 30
+        middle_mcp_flex: 80
+        middle_pip: 30
+        middle_dip: 30
+        ring_mcp_flex: 80
+        ring_pip: 30
+        ring_dip: 30
+        pinky_mcp_flex: 80
+        pinky_pip: 30
+        pinky_dip: 30
+        index_mcp_abd: 128
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta: 270
+      finger_step: 8
+      thumb_step: 8
+      hold_safe_current: 800
+    steps:
+      - name: close_fingers
+        groups:
+          - id: index
+            joints: [index_mcp_flex, index_pip, index_dip]
+            monitor: [index_root1, index_root2, index_tip]
+          - id: middle
+            joints: [middle_mcp_flex, middle_pip, middle_dip]
+            monitor: [middle_root1, middle_root2, middle_tip]
+          - id: ring
+            joints: [ring_mcp_flex, ring_pip, ring_dip]
+            monitor: [ring_root1, ring_root2, ring_tip]
+          - id: pinky
+            joints: [pinky_mcp_flex, pinky_pip, pinky_dip]
+            monitor: [pinky_root1, pinky_root2, pinky_tip]
+      - name: close_thumb
+        step: 8
+        groups:
+          - id: thumb
+            joints: [thumb_mcp_flex, thumb_dip]
+            monitor: [thumb_root1, thumb_tip]
+
+  no_index_warp_by_vision:
+    angles:
+      space: semantic_v3
+      prep:
+        thumb_mcp_flex: 40
+        thumb_mcp_abd: 170
+        thumb_rot: 200
+        thumb_dip: 30
+        index_mcp_flex: 0
+        index_pip: 0
+        index_dip: 0
+        middle_mcp_flex: 90
+        middle_pip: 30
+        middle_dip: 30
+        ring_mcp_flex: 90
+        ring_pip: 30
+        ring_dip: 30
+        pinky_mcp_flex: 90
+        pinky_pip: 30
+        pinky_dip: 30
+        index_mcp_abd: 128
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta: 270
+      finger_step: 8
+      thumb_step: 8
+      hold_safe_current: 800
+    steps:
+      - name: close_fingers
+        groups:
+          - id: middle
+            joints: [middle_mcp_flex, middle_pip, middle_dip]
+            monitor: [middle_root1, middle_root2, middle_tip]
+          - id: ring
+            joints: [ring_mcp_flex, ring_pip, ring_dip]
+            monitor: [ring_root1, ring_root2, ring_tip]
+          - id: pinky
+            joints: [pinky_mcp_flex, pinky_pip, pinky_dip]
+            monitor: [pinky_root1, pinky_root2, pinky_tip]
+      - name: close_thumb
+        step: 8
+        groups:
+          - id: thumb
+            joints: [thumb_mcp_flex, thumb_dip]
+            monitor: [thumb_root1, thumb_tip]
+
+  palmar_by_vision:
+    angles:
+      space: semantic_v3
+      prep:
+        thumb_mcp_flex: 70
+        thumb_mcp_abd: 180
+        thumb_rot: 200
+        thumb_dip: 30
+        index_mcp_flex: 70
+        index_pip: 30
+        index_dip: 30
+        middle_mcp_flex: 70
+        middle_pip: 30
+        middle_dip: 30
+        ring_mcp_flex: 70
+        ring_pip: 30
+        ring_dip: 30
+        pinky_mcp_flex: 70
+        pinky_pip: 30
+        pinky_dip: 30
+        index_mcp_abd: 128
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta: 270
+      finger_step: 8
+      thumb_step: 8
+      hold_safe_current: 800
+    steps:
+      - name: close_fingers
+        groups:
+          - id: index
+            joints: [index_mcp_flex, index_pip, index_dip]
+            monitor: [index_root1, index_root2, index_tip]
+          - id: middle
+            joints: [middle_mcp_flex, middle_pip, middle_dip]
+            monitor: [middle_root1, middle_root2, middle_tip]
+          - id: ring
+            joints: [ring_mcp_flex, ring_pip, ring_dip]
+            monitor: [ring_root1, ring_root2, ring_tip]
+          - id: pinky
+            joints: [pinky_mcp_flex, pinky_pip, pinky_dip]
+            monitor: [pinky_root1, pinky_root2, pinky_tip]
+      - name: close_thumb
+        step: 8
+        groups:
+          - id: thumb
+            joints: [thumb_mcp_flex, thumb_dip]
+            monitor: [thumb_root1, thumb_tip]
+
+  # prep：拇指定位对齐 tripod FK 标定，屈曲留余量给 SFCE 闭合
+  tripod_by_vision:
+    angles:
+      space: semantic_v3
+      prep:
+        thumb_mcp_flex: 100
+        thumb_mcp_abd: 240
+        thumb_rot: 110
+        thumb_dip: 80
+        index_mcp_flex: 120
+        index_pip: 80
+        index_dip: 80
+        middle_mcp_flex: 110
+        middle_pip: 80
+        middle_dip: 80
+        ring_mcp_flex: 0
+        ring_pip: 0
+        ring_dip: 0
+        pinky_mcp_flex: 0
+        pinky_pip: 0
+        pinky_dip: 0
+        index_mcp_abd: 220
+        middle_mcp_abd: 140
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+    motion:
+      type: sequential_force_close
+      preshape_duration: 0.5
+      settle_frames: 10
+    contact:
+      contact_delta: 270
+      finger_step: 8
+      thumb_step: 8
+      hold_safe_current: 800
+    steps:
+      - name: close_fingers
+        groups:
+          - id: index
+            joints: [index_mcp_flex, index_pip, index_dip]
+            monitor: [index_root1, index_root2, index_tip]
+          - id: middle
+            joints: [middle_mcp_flex, middle_pip, middle_dip]
+            monitor: [middle_root1, middle_root2, middle_tip]
+      - name: close_thumb
+        step: 8
+        groups:
+          - id: thumb
+            joints: [thumb_mcp_flex, thumb_dip]
+            monitor: [thumb_root1, thumb_tip]
+
+  disk_by_vision:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 255
+        index_mcp_flex: 140
+        middle_mcp_flex: 140
+        ring_mcp_flex: 140
+        pinky_mcp_flex: 140
+        thumb_mcp_abd: 255
+        index_mcp_abd: 128
+        middle_mcp_abd: 128
+        ring_mcp_abd: 128
+        pinky_mcp_abd: 128
+        thumb_rot: 255
+        thumb_dip: 255
+        index_pip: 130
+        index_dip: 130
+        middle_pip: 130
+        middle_dip: 130
+        ring_pip: 130
+        ring_dip: 130
+        pinky_pip: 130
+        pinky_dip: 130
+    motion:
+      type: static
+      duration: 1.4
+
+  # 与 index_pinch FK 标定对齐（硬编码 fallback 同步）
+  index_ring_by_vision:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 200
+        index_mcp_flex: 150
+        middle_mcp_flex: 0
+        ring_mcp_flex: 0
+        pinky_mcp_flex: 0
+        thumb_mcp_abd: 155
+        thumb_rot: 255
+        thumb_dip: 190
+        index_pip: 240
+        index_dip: 230
+        middle_pip: 0
+        middle_dip: 0
+        ring_pip: 0
+        ring_dip: 0
+        pinky_pip: 0
+        pinky_dip: 0
+    motion:
+      type: static
+      duration: 0.9
+
+  large_wrap_by_vision:
+    angles:
+      space: semantic_v3
+      target:
+        thumb_mcp_flex: 200
+        index_mcp_flex: 220
+        middle_mcp_flex: 220
+        ring_mcp_flex: 220
+        pinky_mcp_flex: 220
+        thumb_mcp_abd: 175
+        thumb_rot: 210
+        thumb_dip: 200
+        index_pip: 210
+        index_dip: 210
+        middle_pip: 210
+        middle_dip: 210
+        ring_pip: 210
+        ring_dip: 210
+        pinky_pip: 210
+        pinky_dip: 210
+    motion:
+      type: static
+      duration: 1.55
